@@ -10,7 +10,7 @@ def _matrices_info(A: torch.Tensor):
         caller = sys._getframe(1).f_code.co_name
         raise ValueError("{} supports 3D Tensors only! Input dim: {}".format(caller, A_dim))
 
-    A_norm = torch.stack([torch.trace(a) for a in A])
+    A_norm = torch.stack([torch.trace(a) for a in A])[:, None, None]
     A_dev = A.device
 
     return A_sz, A_dim, A_norm, A_dev
@@ -18,14 +18,14 @@ def _matrices_info(A: torch.Tensor):
 def _batcher(batch_size: int, M: torch.Tensor):
     return M.unsqueeze(0).repeat([batch_size, 1, 1])
 
-def matrix_sqrt_NS(A: torch.Tensor, iters: int=7, batched: bool=False) -> torch.Tensor:
+def matrix_sqrt_NS(A: torch.Tensor, iters: int=25, batched: bool=False) -> torch.Tensor:
     # 3D batch of matrices only
     A_sz, A_dim, A_norm, A_dev = _matrices_info(A)
     A_batch = A_sz[0]
 
     Y = A / A_norm
-    Z = torch.eye(A_sz[-2:], device=A_dev)
-    eye3 = 3 * torch.eye(A_sz[-2:], device=A_dev)
+    Z = torch.eye(*A_sz[-2:], device=A_dev)
+    eye3 = 3 * torch.eye(*A_sz[-2:], device=A_dev)
 
     # deal with batch dimension:
     Z = _batcher(A_batch, Z)
@@ -48,12 +48,12 @@ def matrix_sqrt_NS(A: torch.Tensor, iters: int=7, batched: bool=False) -> torch.
     Y = Y * (A_norm ** (0.5))
     return Y
 
-def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=25) -> torch.Tensor:
+def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=75) -> torch.Tensor:
     # 3D batch of matrices only
     L_sz, L_dim, L_norm, L_dev = _matrices_info(L)
     L_batch = L_sz[0]
 
-    eyes = _batcher(L_batch, torch.eye(L_sz[-2:], device=L_dev))
+    eyes = _batcher(L_batch, torch.eye(*L_sz[-2:], device=L_dev))
 
     A = eyes - L / L_norm
     L_norm_sqrt = L_norm ** 0.5
