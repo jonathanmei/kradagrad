@@ -1,17 +1,13 @@
 ## Reference code: https://github.com/moskomule/shampoo.pytorch
 ## More reference: https://github.com/jettify/pytorch-optimizer/blob/master/torch_optimizer/shampoo.py
 
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
+
 import torch
 from torch.optim.optimizer import Optimizer
 
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
+import matrix_sqrt
 
-
-def _matrix_sqrt_NS(matrix: torch.Tensor, iters: int=5) -> torch.Tensor:
-    return matrix
-
-def _matrix_sqrt_warm(matrix: torch.Tensor, init: torch.Tensor, iters: int=25) -> torch.Tensor:
-    return matrix
 
 class Kradagrad(Optimizer):
     r"""Implements KrADagrad Optimizer Algorithm.
