@@ -2,6 +2,8 @@ import sys
 
 import torch
 
+import cubic
+
 def _matrices_info(A: torch.Tensor, norm: str='fro'):
     # check if A is 3D, return size and norm
     # `trace` is True, use trace instead of spectral norm
@@ -17,7 +19,7 @@ def _matrices_info(A: torch.Tensor, norm: str='fro'):
         A_norm = torch.stack([torch.linalg.matrix_norm(a) for a in A])
     else:  # singular value
         A_norm = (1 + 1e-6) * torch.stack([torch.linalg.matrix_norm(a, ord=2) for a in A])
-    A_norm = A_norm[:, None, None]
+    A_norm = A_norm[..., None, None]
     A_dev = A.device
 
     return A_sz, A_dim, A_norm, A_dev
@@ -68,15 +70,39 @@ def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=100,
     L_norm_sqrt = L_norm ** 0.5
     X = eyes - L_sqrt_init.to(L_dev) / L_norm_sqrt
     for it_ in range(iters):
-        X = (A + X.bmm(X)) / 2
         if line_search:
-            # TODO: compute coeffs
-            a = 0
-            b = 0
-            c = 0
-            d = 0
-            t = cubic.solve_largest(a, b, c, d)
-    else:
-        AX = X
-    return  (eyes - AX) * L_norm_sqrt
 
+            # solves:
+            #  t = argmin_t || ()^2 - (I - A) ||_F^2
+            #    = argmin_t || C + L*t + Q*t^2 ||_F^2
+
+            X1 = (A + X.bmm(X)) / 2
+            Del = X1 - X
+            XmI = X - eyes
+            Del_norm = torch.linalg.matrix_norm(Del, ord=2)
+            
+            # this one arises from cancellation, not from t
+            # so assign this before normalizing:
+            con = 2 * Del  # C
+
+            # for numerical stability of the cubic solver
+            Del = Del / Del_norm[..., None, None]
+
+            qua =  Del.bmm(Del)  # Q
+            lin = Del.bmm(XmI)  # L
+            lin = lin + lin.transpose(-2, -1)
+
+            # TODO: compute coeffs
+            a = 2 * (qua * qua).sum([-2, -1])
+            b = 3 * (qua * lin).sum([-2, -1])
+            c = 2 * (qua * con).sum([-2, -1]) + (lin * lin).sum([-2, -1])
+            d = (lin * con).sum([-2, -1])
+            t = cubic.solve_smallest(a, b, c, d, thr=Del_norm)
+            low = (t < Del_norm)
+            t[low] = Del_norm[low]
+            max_norm = torch.fmax(1 - torch.linalg.matrix_norm(X, ord=2), Del_norm)
+            t[t > max_norm] = max_norm[t > max_norm]  # trust region
+            X = X + t[..., None, None] * Del
+        else:
+            X = (A + X.bmm(X)) / 2
+    return  (eyes - X) * L_norm_sqrt
