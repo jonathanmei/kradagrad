@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 import torch
 from torch.optim.optimizer import Optimizer
 
-import matrix_sqrt
+import matrix_root as mr
 
 
 class Kradagrad(Optimizer):
@@ -126,12 +126,12 @@ class Kradagrad(Optimizer):
 
                     if dim_id == order - 1:
                         # finally
-                        grad = grad_t @ inv_precond
+                        grad = grad_t @ precond_root
                         # grad: (-1, last_dim)
                         grad = grad.view(original_size)
                     else:
                         # if not final
-                        grad = inv_precond @ grad
+                        grad = precond_root @ grad
                         # grad (dim, -1)
                         grad = grad.view(transposed_size)
 
