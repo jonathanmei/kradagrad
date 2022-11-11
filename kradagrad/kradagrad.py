@@ -75,30 +75,28 @@ class Kradagrad(Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-
-        ### TODO: turn this from shampoo into kradagrad and then dupe it to pp
+        ### TODO: turn this from shampoo into kradagrad++ and then dupe it to kradagrad
         for group in self.param_groups:
             for p in group['params']:
                 if p.grad is None:
                     continue
                 grad = p.grad.data
+                ### TODO: we can cap to n dimensions instead of doing all of them
                 order = grad.ndimension()
                 original_size = grad.size()
                 state = self.state[p]
                 momentum = group['momentum']
                 weight_decay = group['weight_decay']
+
+                # Initialize
                 if len(state) == 0:
                     state['step'] = 0
                     if momentum > 0:
                         state['momentum_buffer'] = grad.clone()
                     for dim_id, dim in enumerate(grad.size()):
                         # precondition matrices
-                        state['precond_{}'.format(dim_id)] = group[
-                            'epsilon'
-                        ] * torch.eye(dim, out=grad.new(dim, dim))
-                        state[
-                            'inv_precond_{dim_id}'.format(dim_id=dim_id)
-                        ] = grad.new(dim, dim).zero_()
+                        state['precond_{}'.format(dim_id)] = torch.eye(dim, out=grad.new(dim, dim)) / group['epsilon'] 
+                        state['precond_root_{}'.format(dim_id)] = grad.new(dim, dim).zero_()
 
                 if momentum > 0:
                     grad.mul_(1 - momentum).add_(
@@ -111,17 +109,20 @@ class Kradagrad(Optimizer):
                 # See Algorithm 2 for detail
                 for dim_id, dim in enumerate(grad.size()):
                     precond = state['precond_{}'.format(dim_id)]
-                    inv_precond = state['inv_precond_{}'.format(dim_id)]
+                    precond_root = state['precond_root_{}'.format(dim_id)]
 
                     # mat_{dim_id}(grad)
                     grad = grad.transpose_(0, dim_id).contiguous()
                     transposed_size = grad.size()
                     grad = grad.view(dim, -1)
 
-                    grad_t = grad.t()
-                    precond.add_(grad @ grad_t)
+                    grad_T = grad.T
+                    Delta = L @ (grad @ grad_T) @ L.T
+                    ### TODO: compute 1/ t_k
+                    ### TODO: implement p-th root
+                    precond.sub_(Delta, t_inv)
                     if state['step'] % group['update_freq'] == 0:
-                        inv_precond.copy_(_matrix_power(precond, -1 / order))
+                        precond_root.copy_(mr.matrix_root(precond, order))
 
                     if dim_id == order - 1:
                         # finally
