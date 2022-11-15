@@ -1,24 +1,30 @@
 import sys
 
+import mpmath
+import numpy as np
 import torch
 
 import cubic
+
+### Support matrix square roots and odd powered roots separately
+# Allows KrADagrad on generic tensor parameters (e.g. matrices, conv filter banks)
+
 
 def _matrices_info(A: torch.Tensor, norm: str='fro'):
     # check if A is 3D, return size and norm
     # `trace` is True, use trace instead of spectral norm
     A_sz = A.size()
     A_dim = A.dim()
-    if A_dim != 3:
+    if A_dim < 3:
         caller = sys._getframe(1).f_code.co_name
-        raise ValueError("{} supports 3D Tensors only! Input dim: {}".format(caller, A_dim))
+        raise ValueError("{} supports batches of matrices only! Input dim: {}".format(caller, A_dim))
 
-    if norm == 'tr':
-        A_norm = torch.stack([torch.trace(a) for a in A])
+    if norm == 'sing':
+        A_norm = (1 + 1e-6) * torch.stack([torch.linalg.matrix_norm(a, ord=2) for a in A])
     elif norm == 'fro':
         A_norm = torch.stack([torch.linalg.matrix_norm(a) for a in A])
-    else:  # singular value
-        A_norm = (1 + 1e-6) * torch.stack([torch.linalg.matrix_norm(a, ord=2) for a in A])
+    else:  # trace
+        A_norm = torch.stack([torch.trace(a) for a in A])
     A_norm = A_norm[..., None, None]
     A_dev = A.device
 
@@ -73,7 +79,7 @@ def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=100,
         if line_search:
 
             # solves:
-            #  t = argmin_t || ()^2 - (I - A) ||_F^2
+            #  t = argmin_t || [I - (X + t*D)]^2 - (I - A) ||_F^2
             #    = argmin_t || C + L*t + Q*t^2 ||_F^2
 
             X1 = (A + X.bmm(X)) / 2
@@ -83,26 +89,179 @@ def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=100,
             
             # this one arises from cancellation, not from t
             # so assign this before normalizing:
-            con = 2 * Del  # C
+            con = 2 * Del  # (C)onstant
 
             # for numerical stability of the cubic solver
             Del = Del / Del_norm[..., None, None]
 
-            qua =  Del.bmm(Del)  # Q
-            lin = Del.bmm(XmI)  # L
+            qua =  Del.bmm(Del)  # (Q)uadratic
+            lin = Del.bmm(XmI)  # (L)inear
             lin = lin + lin.transpose(-2, -1)
 
-            # TODO: compute coeffs
+            # compute cubic coeffs
             a = 2 * (qua * qua).sum([-2, -1])
             b = 3 * (qua * lin).sum([-2, -1])
             c = 2 * (qua * con).sum([-2, -1]) + (lin * lin).sum([-2, -1])
             d = (lin * con).sum([-2, -1])
-            t = cubic.solve_smallest(a, b, c, d, thr=Del_norm)
-            low = (t < Del_norm)
-            t[low] = Del_norm[low]
-            max_norm = torch.fmax(1 - torch.linalg.matrix_norm(X, ord=2), Del_norm)
-            t[t > max_norm] = max_norm[t > max_norm]  # trust region
-            X = X + t[..., None, None] * Del
+            try:
+                t = cubic.solve_smallest(a, b, c, d, thr=Del_norm)
+
+                # we know the update can be at least Del_norm (unaccelerated)
+                low = (t < Del_norm)
+                t[low] = Del_norm[low]
+                # trust region, keep || X ||_2 < 1
+                max_norm = torch.fmax(1 - torch.linalg.matrix_norm(X, ord=2), Del_norm)
+                t[t > max_norm] = max_norm[t > max_norm]
+
+                # Finally, apply update
+                X = X + t[..., None, None] * Del
+            except:
+                X = X1
         else:
             X = (A + X.bmm(X)) / 2
-    return  (eyes - X) * L_norm_sqrt
+    return (eyes - X) * L_norm_sqrt
+
+def mat_pow(A: torch.Tensor, p: int):
+    # performs A^p using O(log_2(p)) matmuls
+    if p < 1:
+        raise ValueError("mat_pow only valid for positive integer powers!")
+    if p == 1:
+        return A
+    # string:
+    pb = bin(p)[2:]
+    X_prev = A  # tmp var tracking A^(2^i))
+    Xpow = None  # accumulator
+    for i, save in enumerate(pb[::-1]):
+        if save == '1':
+            if Xpow is None:
+                Xpow = X_prev
+            else:
+                Xpow = Xpow.bmm(X_prev)
+        if i < len(pb) - 1:
+            X_prev = X_prev.bmm(X_prev.transpose(-2, -1))
+    return Xpow
+
+def matrix_inv_warm(A: torch.Tensor, A_p:torch.Tensor, iters: int=10, norm: str='fro') -> torch.Tensor:
+    # Newton method for inverting A
+    A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
+    A_batch = A_sz[0]
+
+    Z = A / A_norm
+    I = torch.eye(*A_sz[-2:], device=A_dev)
+    I = _batcher(A_batch, I)
+    X = A_p
+    for it_ in range(iters):
+        X = 2 * X - X.bmm(Z.bmm(X))
+    return X / A_norm
+
+def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor, iters: int=20, norm: str='fro', inner_iters: int=5) -> torch.Tensor:
+    # Coupled Newton iterations to compute A^(1/p) for even p
+    # X_p: initial guess of A^(1/p)
+    if p % 2 != 0:
+        raise ValueError("matrix_even_root_N_warm only supports even roots! p: {}".format(p))
+    A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
+    A_batch = A_sz[0]
+
+    Z = A / A_norm
+    I = torch.eye(*A_sz[-2:], device=A_dev)
+    I = _batcher(A_batch, I)
+
+    p_2 = p // 2
+    A_norm_p = A_norm ** (1 / p)
+    X = A_p / A_norm_p
+    Xp2 = mat_pow(X, p_2)
+    if inner_iters > 0:
+        Xp2_inv = matrix_inv_warm(Xp2, I, inner_iters, norm)
+        M = Xp2_inv.bmm(Z.bmm(Xp2_inv))
+        # crude guess to initialize
+        IM_pp2_inv = I
+    else:
+        Xp2_LD, Xp2_pivot, _ = torch.linalg.ldl_factor_ex(Xp2)
+        M = torch.linalg.ldl_solve(
+            Xp2_LD, Xp2_pivot,
+            torch.linalg.ldl_solve(Xp2_LD, Xp2_pivot, Z).transpose(-2, -1)
+        )
+    for i_ in range(iters):
+        IM_p = (I * (p - 1) + M) / p
+        if i_ % 2 == 0:
+            X = X.bmm(IM_p)
+        else:
+            X = IM_p.bmm(X)
+        X = (X + X.transpose(-2, -1)) / 2
+        IM_pp2 = mat_pow(IM_p , p_2)
+        if inner_iters > 0:
+            IM_pp2_inv = matrix_inv_warm(IM_pp2, IM_pp2_inv, inner_iters, norm)
+            M = IM_pp2_inv.bmm(M.bmm(IM_pp2_inv))
+        else:
+            IM_pp2_LD, IM_pp2_pivot, _ = torch.linalg.ldl_factor_ex(IM_pp2)
+            M = torch.linalg.ldl_solve(
+                IM_pp2_LD, IM_pp2_pivot,
+                torch.linalg.ldl_solve(IM_pp2_LD, IM_pp2_pivot, M).transpose(-2, -1)
+            )
+
+    return X * A_norm_p
+
+## Not great compared to Newton or Binomial w/ line search
+def make_pade_rooter(n: int, m: int, l: int, norm: str='fro'):
+    # Uses pade approximation of order[m, l] to create a function
+    # that computes the nth root on a batch of matrices
+    f = lambda x: mpmath.root(1 - x, n)
+    a = mpmath.taylor(f, 0, m+l+4)
+    p, q = mpmath.pade(a, m, l)
+    pade_p, pade_q = [torch.Tensor(np.array(x).astype(float)) for x in [p, q]]
+
+    def matrix_rt_pade(A: torch.Tensor, pades) -> torch.Tensor:
+        # Heavily inspired by: https://github.com/KingJamesSong/FastDifferentiableMatSqrt
+        A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
+        A_batch = A_sz[0]
+
+        Y = A / A_norm
+        pade_p, pade_q = [x.to(A_dev) for x in pades]
+        I = torch.eye(*A_sz[-2:], device=A_dev)
+        I = _batcher(A_batch, I)
+
+        # # we might get underflow summing from large to small...
+        # # try multiplicative updates instead?
+        # p_rt = pade_p[0] * I
+        # q_rt = pade_q[0] * I
+        # X = I - Y
+        # X_pow = X
+        # for i_ in range(max(m, l)):
+        #     if i_ < m:
+        #         p_rt += pade_p[i_ + 1] * X_pow
+        #     if i_ < l:
+        #         q_rt += pade_q[i_ + 1] * X_pow
+        #     X_pow = X_pow.bmm(X)
+        #     X_pow = (X_pow + X_pow.transpose(-2, -1)) / 2
+        X = I - Y
+        if len(pade_p) > 0:
+            p_rt = pade_p[-1] * X
+        else:
+            p_rt = torch.zeros_like(X)
+        if len(pade_q) > 0:
+            q_rt = pade_q[-1] * X
+        else:
+            q_rt = torch.zeros_like(X)
+        for i_ in range(max(m, l)-1, 0, -1):
+            if i_ < m:
+                if i_ % 2 == 0:
+                    p_rt = pade_p[i_] * X + X.bmm(p_rt)
+                else:
+                    p_rt = pade_p[i_] * X + p_rt.bmm(X)
+            if i_ < l:
+                if i_ % 2 == 0:
+                    q_rt = pade_q[i_] * X + X.bmm(q_rt)
+                else:
+                    q_rt = pade_q[i_] * X + q_rt.bmm(X)
+        p_rt += pade_p[0] * I
+        q_rt += pade_q[0] * I
+
+        # Nb: experimental API! Pin version of pytorch==1.13
+        # cholesky: save 1/2 flops, numerically stable
+        q_LD, q_pivots, _ = torch.linalg.ldl_factor_ex(q_rt)
+        Y_rt = torch.linalg.ldl_solve(q_LD, q_pivots, p_rt)
+
+        A_rt = Y_rt * (A_norm ** (1./n))
+        return A_rt
+
+    return lambda x: matrix_rt_pade(x, (pade_p, pade_q))
