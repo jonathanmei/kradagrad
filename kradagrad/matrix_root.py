@@ -153,10 +153,9 @@ def matrix_inv_warm(A: torch.Tensor, A_p:torch.Tensor, tol: float=1e-4, iters: i
     X = A_p
     for it_ in range(iters):
         Y = Z.bmm(X)
-        X_ = 2 * X - X.bmm(Y)
+        X = 2 * X - X.bmm(Y)
         if torch.linalg.matrix_norm(Y - I, ord=norm).max() < tol:
             break
-        X = X_
     return X / A_norm
 
 def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor, tol: float=1e-4, iters: int=20, norm: str='fro', inner_tol: float=1e-4, inner_iters: int=5) -> torch.Tensor:
@@ -193,12 +192,12 @@ def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor, tol: flo
         else:
             X = IM_p.bmm(X)
         X = (X + X.transpose(-2, -1)) / 2
+        if torch.linalg.matrix_norm(IM_p - I, ord=norm).max() < tol:
+            break
         if it_ < iters:
             IM_pp2 = mat_pow(IM_p , p_2)
             #if inner_iters > 0:
             IM_pp2_inv = matrix_inv_warm(IM_pp2, IM_pp2_inv, inner_tol, inner_iters, norm)
-            if torch.linalg.matrix_norm(IM_pp2_inv - I, ord=norm).max() < tol:
-                break
             M_ = IM_pp2_inv.bmm(M.bmm(IM_pp2_inv))
             #else:
             #    IM_pp2_LD, IM_pp2_pivot, _ = torch.linalg.ldl_factor_ex(IM_pp2)
