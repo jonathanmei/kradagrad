@@ -138,10 +138,11 @@ def mat_pow(A: torch.Tensor, p: int):
             else:
                 Xpow = Xpow.bmm(X_prev)
         if i < len(pb) - 1:
+            # stays more symmetric:
             X_prev = X_prev.bmm(X_prev.transpose(-2, -1))
     return Xpow
 
-def matrix_inv_warm(A: torch.Tensor, A_p:torch.Tensor, iters: int=10, norm: str='fro') -> torch.Tensor:
+def matrix_inv_warm(A: torch.Tensor, A_p:torch.Tensor, tol: float=1e-4, iters: int=10, norm: str='fro') -> torch.Tensor:
     # Newton method for inverting A
     A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
     A_batch = A_sz[0]
@@ -151,12 +152,17 @@ def matrix_inv_warm(A: torch.Tensor, A_p:torch.Tensor, iters: int=10, norm: str=
     I = _batcher(A_batch, I)
     X = A_p
     for it_ in range(iters):
-        X = 2 * X - X.bmm(Z.bmm(X))
+        Y = Z.bmm(X)
+        X_ = 2 * X - X.bmm(Y)
+        if torch.linalg.matrix_norm(Y - I, ord=norm).max() < tol:
+            break
+        X = X_
     return X / A_norm
 
-def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor, iters: int=20, norm: str='fro', inner_iters: int=5) -> torch.Tensor:
+def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor, tol: float=1e-4, iters: int=20, norm: str='fro', inner_tol: float=1e-4, inner_iters: int=5) -> torch.Tensor:
     # Coupled Newton iterations to compute A^(1/p) for even p
     # X_p: initial guess of A^(1/p)
+    # Uses either inner Newton iterations to compute inverse or Cholesky solver to apply
     if p % 2 != 0:
         raise ValueError("matrix_even_root_N_warm only supports even roots! p: {}".format(p))
     A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
@@ -170,17 +176,16 @@ def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor, iters: i
     A_norm_p = A_norm ** (1 / p)
     X = A_p / A_norm_p
     Xp2 = mat_pow(X, p_2)
-    if inner_iters > 0:
-        Xp2_inv = matrix_inv_warm(Xp2, I, inner_iters, norm)
-        M = Xp2_inv.bmm(Z.bmm(Xp2_inv))
-        # crude guess to initialize
-        IM_pp2_inv = I
-    else:
-        Xp2_LD, Xp2_pivot, _ = torch.linalg.ldl_factor_ex(Xp2)
-        M = torch.linalg.ldl_solve(
-            Xp2_LD, Xp2_pivot,
-            torch.linalg.ldl_solve(Xp2_LD, Xp2_pivot, Z).transpose(-2, -1)
-        )
+    #if inner_iters > 0:
+    Xp2_inv = matrix_inv_warm(Xp2, I, inner_tol, inner_iters, norm)
+    M = Xp2_inv.bmm(Z.bmm(Xp2_inv))
+    IM_pp2_inv = I
+    #else:
+    #    Xp2_LD, Xp2_pivot, _ = torch.linalg.ldl_factor_ex(Xp2)
+    #    M = torch.linalg.ldl_solve(
+    #        Xp2_LD, Xp2_pivot,
+    #        torch.linalg.ldl_solve(Xp2_LD, Xp2_pivot, Z).transpose(-2, -1)
+    #    )
     for i_ in range(iters):
         IM_p = (I * (p - 1) + M) / p
         if i_ % 2 == 0:
@@ -188,17 +193,20 @@ def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor, iters: i
         else:
             X = IM_p.bmm(X)
         X = (X + X.transpose(-2, -1)) / 2
-        IM_pp2 = mat_pow(IM_p , p_2)
-        if inner_iters > 0:
-            IM_pp2_inv = matrix_inv_warm(IM_pp2, IM_pp2_inv, inner_iters, norm)
-            M = IM_pp2_inv.bmm(M.bmm(IM_pp2_inv))
-        else:
-            IM_pp2_LD, IM_pp2_pivot, _ = torch.linalg.ldl_factor_ex(IM_pp2)
-            M = torch.linalg.ldl_solve(
-                IM_pp2_LD, IM_pp2_pivot,
-                torch.linalg.ldl_solve(IM_pp2_LD, IM_pp2_pivot, M).transpose(-2, -1)
-            )
-
+        if it_ < iters:
+            IM_pp2 = mat_pow(IM_p , p_2)
+            #if inner_iters > 0:
+            IM_pp2_inv = matrix_inv_warm(IM_pp2, IM_pp2_inv, inner_tol, inner_iters, norm)
+            if torch.linalg.matrix_norm(IM_pp2_inv - I, ord=norm).max() < tol:
+                break
+            M_ = IM_pp2_inv.bmm(M.bmm(IM_pp2_inv))
+            #else:
+            #    IM_pp2_LD, IM_pp2_pivot, _ = torch.linalg.ldl_factor_ex(IM_pp2)
+            #    M = torch.linalg.ldl_solve(
+            #        IM_pp2_LD, IM_pp2_pivot,
+            #        torch.linalg.ldl_solve(IM_pp2_LD, IM_pp2_pivot, M).transpose(-2, -1)
+            #    )
+            M = M_
     return X * A_norm_p
 
 ## Not great compared to Newton or Binomial w/ line search
