@@ -48,10 +48,12 @@ class KrADPreconditioner(Preconditioner):
         exp = self.exponent_for_preconditioner()
         eps = self._hps.matrix_eps
         for i, stat in enumerate(self.statistics):
-            self.preconditioners[i] = mr.matrix_even_root_N_warm(
-                exp, stat[None, ...],
-                self.preconditioners[i][None, ...]
-            )[0]  # mr operates on batches
+            self.preconditioners[i] = mr.matrix_power_svd(stat, 1 / exp)
+            #self.preconditioners[i] = mr.matrix_even_root_N_warm(
+            #    exp, stat[None, ...],
+            #    self.preconditioners[i][None, ...],
+            #    iters=25, inner_iters=20
+            #)[0]  # mr operates on batches
 
     @torch.no_grad()
     def preconditioned_grad(self, grad):

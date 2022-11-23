@@ -66,7 +66,7 @@ def matrix_inv_warm(A: torch.Tensor, A_p:torch.Tensor, tol: float=1e-4, iters: i
     for it_ in range(iters):
         Y = Z.bmm(X)
         X = 2 * X - X.bmm(Y)
-        if torch.linalg.matrix_norm(Y - I, ord=norm).max() < tol:
+        if torch.linalg.matrix_norm(Y - I, ord=norm).max() / A_sz[-1] < tol:
             break
     return X / A_norm
 
@@ -104,7 +104,7 @@ def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor, tol: flo
         else:
             X = IM_p.bmm(X)
         X = (X + X.transpose(-2, -1)) / 2
-        if torch.linalg.matrix_norm(IM_p - I, ord=norm).max() < tol:
+        if torch.linalg.matrix_norm(IM_p - I, ord=norm).max() / A_sz[-1] < tol:
             break
         if i_ < iters:
             IM_pp2 = mat_pow(IM_p , p_2)
@@ -274,3 +274,11 @@ def make_pade_rooter(n: int, m: int, l: int, norm: str='fro'):
         return A_rt
 
     return lambda x: matrix_rt_pade(x, (pade_p, pade_q))
+
+def matrix_power_svd(matrix: torch.Tensor, power: float) -> torch.Tensor:
+    # use CPU for svd for speed up
+    device = matrix.device
+    matrix = matrix.cpu()
+    u, s, v = torch.svd(matrix)
+    return (u @ s.pow_(power).diag() @ v.t()).to(device)
+
