@@ -1,6 +1,7 @@
 # --- Note from Kradagrad authors ---
-# Besides this note, this file is unmodified from the official Shampoo implementation
-#   at the time of access and is included in this repository for convenience.
+# Besides this note, this file is a lightly modified version of the official Shampoo implementation
+#   at the time of access and is included in this repository for convenience. The edits are for 
+#   breaking deprecattions in pytorch and for graph simplification.
 #     URL: https://github.com/google-research/google-research/blob/master/scalable_shampoo/pytorch/shampoo.py
 #     commit: ccc94ce
 #     accessed: 2022_11_22
@@ -80,17 +81,21 @@ class Graft:
   """Base class to perform grafting onto Shampoo. This class does no grafting.
   """
 
+  @torch.no_grad()
   def __init__(self, hps, unused_var):
     self.hps = hps
 
+  @torch.no_grad()
   def add_statistics(self, grad):
     pass
 
+  @torch.no_grad()
   def precondition_gradient(self, grad):
-    return grad
+    return grad.detach()
 
+  @torch.no_grad()
   def update_momentum(self, update, unused_beta1):
-    return update
+    return update.detach()
 
 
 class SGDGraft(Graft):
@@ -99,12 +104,14 @@ class SGDGraft(Graft):
   momentum maintains an exponentially weighted moving average of gradients.
   """
 
+  @torch.no_grad()
   def __init__(self, hps, var):
     super(SGDGraft, self).__init__(hps, var)
-    self.momentum = torch.zeros_like(var.data, device=var.get_device())
+    self.momentum = torch.zeros_like(var.data, device=var.device)
 
+  @torch.no_grad()
   def update_momentum(self, update, beta1):
-    self.momentum.mul_(beta1).add_(update)
+    self.momentum.mul_(beta1).add_(update.detach())
     return self.momentum
 
 
@@ -114,15 +121,19 @@ class AdagradGraft(SGDGraft):
   Essentially an implementation of Adagrad with momentum.
   """
 
+  @torch.no_grad()
   def __init__(self, hps, var):
     super(AdagradGraft, self).__init__(hps, var)
-    self.statistics = torch.zeros_like(var.data, device=var.get_device())
+    self.statistics = torch.zeros_like(var.data, device=var.device)
 
+  @torch.no_grad()
   def add_statistics(self, grad):
+    grad = grad.detach()
     self.statistics.add_(grad * grad)
 
+  @torch.no_grad()
   def precondition_gradient(self, grad):
-    return grad / (torch.sqrt(self.statistics) + self.hps.diagonal_eps)
+    return grad.detach() / (torch.sqrt(self.statistics) + self.hps.diagonal_eps)
 
 
 class BlockPartitioner:
@@ -133,6 +144,7 @@ class BlockPartitioner:
     (1024, 512) each.
   """
 
+  @torch.no_grad()
   def __init__(self, var, hps):
     self._shape = var.shape
     self._splits = []
@@ -157,17 +169,20 @@ class BlockPartitioner:
     for t in itertools.product(*split_sizes):
       self._preconditioner_shapes.extend([[d, d] for d in t])
 
+  @torch.no_grad()
   def shapes_for_preconditioners(self):
     return self._preconditioner_shapes
 
+  @torch.no_grad()
   def num_splits(self):
     return self._num_splits
 
+  @torch.no_grad()
   def partition(self, tensor):
     """Partition tensor into blocks."""
 
     assert tensor.shape == self._shape
-    tensors = [tensor]
+    tensors = [tensor.detach()]
     for (i, sizes) in self._split_sizes:
       tensors_local = []
       for t in tensors:
@@ -176,6 +191,7 @@ class BlockPartitioner:
       tensors = tensors_local
     return tensors
 
+  @torch.no_grad()
   def merge_partitions(self, partitions):
     """Merge partitions back to original shape."""
 
@@ -192,6 +208,7 @@ class BlockPartitioner:
     return partitions[0]
 
 
+@torch.no_grad()
 def _merge_small_dims(shape_to_merge, max_dim):
   """Merge small dimensions.
 
@@ -223,6 +240,7 @@ def _merge_small_dims(shape_to_merge, max_dim):
 class Preconditioner:
   """Compute statistics/shape from gradients for preconditioning."""
 
+  @torch.no_grad()
   def __init__(self, var, hps):
     self._hps = hps
     self._original_shape = var.shape
@@ -231,11 +249,11 @@ class Preconditioner:
       self._transformed_shape = _merge_small_dims(
           self._original_shape, hps.block_size)
 
-    reshaped_var = torch.reshape(var, self._transformed_shape)
+    reshaped_var = torch.reshape(var.detach(), self._transformed_shape)
     self._partitioner = BlockPartitioner(reshaped_var, hps)
     shapes = self._partitioner.shapes_for_preconditioners()
     rank = len(self._transformed_shape)
-    device = var.get_device()
+    device = var.device
     if rank <= 1:
       self.statistics = []
       self.preconditioners = []
@@ -244,6 +262,7 @@ class Preconditioner:
       self.statistics = [eps * torch.eye(s[0], device=device) for s in shapes]
       self.preconditioners = [torch.eye(s[0], device=device) for s in shapes]
 
+  @torch.no_grad()
   def add_statistics(self, grad):
     """Compute statistics from gradients and add to the correct state entries.
 
@@ -251,7 +270,7 @@ class Preconditioner:
       grad: Gradient to compute statistics from.
     """
     if not self.statistics: return
-    reshaped_grad = torch.reshape(grad, self._transformed_shape)
+    reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
     partitioned_grads = self._partitioner.partition(reshaped_grad)
     w1 = self._hps.beta2
     w2 = 1.0 if w1 == 1.0 else (1.0 - w1)
@@ -262,12 +281,14 @@ class Preconditioner:
         stat = torch.tensordot(grad, grad, [axes, axes])
         self.statistics[j*rank + i].mul_(w1).add_(stat, alpha=w2)
 
+  @torch.no_grad()
   def exponent_for_preconditioner(self):
     """Returns exponent to use for inverse-pth root M^{-1/p}."""
     if self._hps.inverse_exponent_override > 0:
       return self._hps.inverse_exponent_override
     return 2 * len(self._transformed_shape)
 
+  @torch.no_grad()
   def compute_preconditioners(self):
     """Compute L^{-1/exp} for each stats matrix L."""
     exp = self.exponent_for_preconditioner()
@@ -276,6 +297,7 @@ class Preconditioner:
       self.preconditioners[i] = matrix_functions.ComputePower(
           stat, exp, ridge_epsilon=eps)
 
+  @torch.no_grad()
   def preconditioned_grad(self, grad):
     """Precondition the gradient.
 
@@ -286,7 +308,7 @@ class Preconditioner:
       A preconditioned gradient.
     """
     if not self.preconditioners: return grad
-    reshaped_grad = torch.reshape(grad, self._transformed_shape)
+    reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
     partitioned_grads = self._partitioner.partition(reshaped_grad)
     preconditioned_partitioned_grads = []
     num_splits = self._partitioner.num_splits()
@@ -313,7 +335,7 @@ GRAFT = 'graft'
 
 class Shampoo(optim.Optimizer):
   """The Shampoo optimizer."""
-
+  @torch.no_grad()
   def __init__(self,
                params,
                lr=1.0,
@@ -323,10 +345,12 @@ class Shampoo(optim.Optimizer):
     self.hps = hyperparams
     super(Shampoo, self).__init__(params, defaults)
 
+  @torch.no_grad()
   def init_var_state(self, var, state):
     """Initialize the PyTorch state of for a single variable."""
+    var = var.detach()
     state[STEP] = 0
-    state[MOMENTUM] = torch.zeros_like(var.data, device=var.get_device())
+    state[MOMENTUM] = torch.zeros_like(var.data, device=var.device)
     state[PRECONDITIONER] = Preconditioner(var, self.hps)
     if self.hps.graft_type == LayerwiseGrafting.ADAGRAD:
       state[GRAFT] = AdagradGraft(self.hps, var)
@@ -335,13 +359,14 @@ class Shampoo(optim.Optimizer):
     else:
       state[GRAFT] = Graft(self.hps, var)
 
+  @torch.no_grad()
   def step(self, closure=None):
     hps = self.hps
     for group in self.param_groups:
       lr = group['lr']
       for p in group['params']:
         if p.grad is None: continue
-        grad = p.grad.data
+        grad = p.grad.detach()
         if grad.is_sparse:
           raise RuntimeError('Shampoo does not support sparse yet')
         state = self.state[p]

@@ -16,6 +16,10 @@ from shampoo import (
 
 class KrADPreconditioner(Preconditioner):
     @torch.no_grad()
+    def __init__(self, var, hps):
+        super().__init__(var, hps)
+
+    @torch.no_grad()
     def add_statistics(self, grad):
         """Compute inverse KrAD statistics from gradients and add to the correct state entries.
 
@@ -23,7 +27,7 @@ class KrADPreconditioner(Preconditioner):
           grad: Gradient to compute statistics from.
         """
         if not self.statistics: return
-        reshaped_grad = torch.reshape(grad, self._transformed_shape)
+        reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
         partitioned_grads = self._partitioner.partition(reshaped_grad)
         w1 = self._hps.beta2
         w2 = 1.0 if w1 == 1.0 else (1.0 - w1)
@@ -49,15 +53,20 @@ class KrADPreconditioner(Preconditioner):
                 self.preconditioners[i][None, ...]
             )[0]  # mr operates on batches
 
+    @torch.no_grad()
+    def preconditioned_grad(self, grad):
+        return super().preconditioned_grad(grad)
+
 
 class KradagradPP(Shampoo):
     r"""Implements a simple version of Kradagrad++ Optimizer Algorithm.
     Extends the unoptimized official pytorch implementation of Shampoo
     """
+    @torch.no_grad()
     def init_var_state(self, var, state):
         """Initialize the PyTorch state of for a single variable."""
         state[STEP] = 0
-        state[MOMENTUM] = torch.zeros_like(var.data, device=var.get_device())
+        state[MOMENTUM] = torch.zeros_like(var.data, device=var.device)
         state[PRECONDITIONER] = KrADPreconditioner(var, self.hps)
         if self.hps.graft_type == LayerwiseGrafting.ADAGRAD:
             state[GRAFT] = AdagradGraft(self.hps, var)
