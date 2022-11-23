@@ -49,7 +49,7 @@ class KrADPreconditioner(Preconditioner):
         eps = self._hps.matrix_eps
         for i, stat in enumerate(self.statistics):
             self.preconditioners[i] = mr.matrix_even_root_N_warm(
-                exp, stat,
+                exp, stat[None, ...],
                 self.preconditioners[i][None, ...]
             )[0]  # mr operates on batches
 

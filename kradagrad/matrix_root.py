@@ -106,7 +106,7 @@ def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor, tol: flo
         X = (X + X.transpose(-2, -1)) / 2
         if torch.linalg.matrix_norm(IM_p - I, ord=norm).max() < tol:
             break
-        if it_ < iters:
+        if i_ < iters:
             IM_pp2 = mat_pow(IM_p , p_2)
             #if inner_iters > 0:
             IM_pp2_inv = matrix_inv_warm(IM_pp2, IM_pp2_inv, inner_tol, inner_iters, norm)
