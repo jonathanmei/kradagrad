@@ -33,7 +33,7 @@ class KrADPreconditioner(Preconditioner):
                 axes = list(range(i)) + list(range(i + 1, rank))
                 stat = torch.tensordot(grad, grad, [axes, axes])
                 stat = stat.mm(self.statistics[j*rank + i].T)
-                t_k_inv = 1.0 / (1.0 + torch.linalg.matrix_norm(stat, 'fro'))
+                t_k_inv = -1.0 / (1.0 + torch.linalg.matrix_norm(stat, 'fro'))
                 stat = self.statistics[j*rank + i].mm(stat)
                 stat.mul_(t_k_inv)
                 self.statistics[j*rank + i].mul_(w1).add_(stat, alpha=w2)
