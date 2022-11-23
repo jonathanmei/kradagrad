@@ -55,16 +55,16 @@ class KradagradPP(Shampoo):
     Extends the unoptimized official pytorch implementation of Shampoo
     """
     def init_var_state(self, var, state):
-    """Initialize the PyTorch state of for a single variable."""
-    state[STEP] = 0
-    state[MOMENTUM] = torch.zeros_like(var.data, device=var.get_device())
-    state[PRECONDITIONER] = KrADPreconditioner(var, self.hps)
-    if self.hps.graft_type == LayerwiseGrafting.ADAGRAD:
-      state[GRAFT] = AdagradGraft(self.hps, var)
-    elif self.hps.graft_type == LayerwiseGrafting.SGD:
-      state[GRAFT] = SGDGraft(self.hps, var)
-    else:
-      state[GRAFT] = Graft(self.hps, var)
+        """Initialize the PyTorch state of for a single variable."""
+        state[STEP] = 0
+        state[MOMENTUM] = torch.zeros_like(var.data, device=var.get_device())
+        state[PRECONDITIONER] = KrADPreconditioner(var, self.hps)
+        if self.hps.graft_type == LayerwiseGrafting.ADAGRAD:
+            state[GRAFT] = AdagradGraft(self.hps, var)
+        elif self.hps.graft_type == LayerwiseGrafting.SGD:
+            state[GRAFT] = SGDGraft(self.hps, var)
+        else:
+            state[GRAFT] = Graft(self.hps, var)
 
     @torch.no_grad()
     def step(self, closure=None):
