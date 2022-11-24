@@ -36,6 +36,8 @@ import numpy as np
 import torch
 import torch.optim as optim
 
+import matrix_root as mr
+
 
 # Grafting is a technique to fix the layerwise scale of Shampoo optimizer.
 # https://arxiv.org/pdf/2002.11803.pdf studies this in detail. This
@@ -294,8 +296,9 @@ class Preconditioner:
     exp = self.exponent_for_preconditioner()
     eps = self._hps.matrix_eps
     for i, stat in enumerate(self.statistics):
-      self.preconditioners[i] = matrix_functions.ComputePower(
-          stat, exp, ridge_epsilon=eps)
+      #self.preconditioners[i] = matrix_functions.ComputePower(
+      #    stat, exp, ridge_epsilon=eps)
+      self.preconditioners[i] = mr.matrix_power_svd(stat + eps * torch.eye(stat.size()[0]), 1/exp)
 
   @torch.no_grad()
   def preconditioned_grad(self, grad):

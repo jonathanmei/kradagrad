@@ -1,6 +1,6 @@
 import sys
 
-import mpmath
+#import mpmath
 import numpy as np
 import torch
 
@@ -210,6 +210,14 @@ def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=100,
             X = (A + X.bmm(X)) / 2
     return (eyes - X) * L_norm_sqrt
 
+def matrix_power_svd(matrix: torch.Tensor, power: float) -> torch.Tensor:
+    # use CPU for svd for speed up
+    device = matrix.device
+    matrix = matrix.cpu()
+    u, s, v = torch.svd(matrix)
+    return (u @ s.pow_(power).diag() @ v.t()).to(device)
+
+"""
 def make_pade_rooter(n: int, m: int, l: int, norm: str='fro'):
     # Uses pade approximation of order[m, l] to create a function
     # that computes the nth root on a batch of matrices
@@ -274,11 +282,4 @@ def make_pade_rooter(n: int, m: int, l: int, norm: str='fro'):
         return A_rt
 
     return lambda x: matrix_rt_pade(x, (pade_p, pade_q))
-
-def matrix_power_svd(matrix: torch.Tensor, power: float) -> torch.Tensor:
-    # use CPU for svd for speed up
-    device = matrix.device
-    matrix = matrix.cpu()
-    u, s, v = torch.svd(matrix)
-    return (u @ s.pow_(power).diag() @ v.t()).to(device)
-
+"""

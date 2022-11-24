@@ -48,7 +48,7 @@ class KrADPreconditioner(Preconditioner):
         exp = self.exponent_for_preconditioner()
         eps = self._hps.matrix_eps
         for i, stat in enumerate(self.statistics):
-            self.preconditioners[i] = mr.matrix_power_svd(stat, 1 / exp)
+            self.preconditioners[i] = mr.matrix_power_svd(stat, 1 / exp) if exp > 1 else stat
             #self.preconditioners[i] = mr.matrix_even_root_N_warm(
             #    exp, stat[None, ...],
             #    self.preconditioners[i][None, ...],
