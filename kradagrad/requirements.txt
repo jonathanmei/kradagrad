@@ -1,5 +1,7 @@
 datasets==2.7.1
 jupyterlab==3.5.0
 matplotlib==3.6.2
+tensorboardX==2.5.1
 torch==1.13.0
+torchtext==0.3.1
 torchvision==0.14.0
