@@ -1,3 +1,9 @@
+# --- Note from Kradagrad authors ---
+# Besides this note, this file an unmodified version of ResNet for CIFAR-10/100.
+#     URL: https://github.com/akamaster/pytorch_resnet_cifar10
+#     commit: d5489e8
+#     accessed: 2022_11_23
+# ----------- End of note -----------
 '''
 Properly implemented ResNet-s for CIFAR10 as described in paper [1].
 

@@ -37,23 +37,27 @@ class KrADPreconditioner(Preconditioner):
                 axes = list(range(i)) + list(range(i + 1, rank))
                 stat = torch.tensordot(grad, grad, [axes, axes])
                 stat = stat.mm(self.statistics[j*rank + i].T)
-                t_k_inv = -1.0 / (1.0 + torch.linalg.matrix_norm(stat, 'fro'))
+                t_k_inv = -1.0 / (1.0 + mr._matrices_norm(stat, 'fro'))
                 stat = self.statistics[j*rank + i].mm(stat)
                 stat.mul_(t_k_inv)
                 self.statistics[j*rank + i].mul_(w1).add_(stat, alpha=w2)
 
     @torch.no_grad()
-    def compute_preconditioners(self):
+    def compute_preconditioners(self, **kwargs):
         """Compute L^{1/exp} for each statistics matrix L"""
         exp = self.exponent_for_preconditioner()
         eps = self._hps.matrix_eps
         for i, stat in enumerate(self.statistics):
-            self.preconditioners[i] = mr.matrix_power_svd(stat, 1 / exp) if exp > 1 else stat
-            #self.preconditioners[i] = mr.matrix_even_root_N_warm(
-            #    exp, stat[None, ...],
-            #    self.preconditioners[i][None, ...],
-            #    iters=25, inner_iters=20
-            #)[0]  # mr operates on batches
+            if stat.device.type == 'cpu':
+                self.preconditioners[i] = mr.matrix_power_svd(stat, 1 / exp) if exp > 1 else stat
+                if kwargs.get('step', 0) > 32*280 and kwargs.get('step', 1) % (32*90) == 0:
+                    print(i, kwargs['step'], mr._matrices_norm(stat[None, ...])[0])
+            else:
+                self.preconditioners[i] = mr.mat_root(
+                    stat[None, ...], exp,
+                    self.preconditioners[i][None, ...],
+                    iters=12, tol=1e-4, inner_iters=8, inner_tol=1e-3
+                )[0]  # mr.mat_root operates on batches
 
     @torch.no_grad()
     def preconditioned_grad(self, grad):

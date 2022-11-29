@@ -1,7 +1,7 @@
 # --- Note from Kradagrad authors ---
 # Besides this note, this file is a lightly modified version of the official Shampoo implementation
 #   at the time of access and is included in this repository for convenience. The edits are for 
-#   breaking deprecattions in pytorch and for graph simplification.
+#   breaking deprecattions in pytorch, graph simplification, and half-precision training.
 #     URL: https://github.com/google-research/google-research/blob/master/scalable_shampoo/pytorch/shampoo.py
 #     commit: ccc94ce
 #     accessed: 2022_11_22
@@ -31,11 +31,11 @@ import enum
 import itertools
 
 from dataclasses import dataclass
-import matrix_functions
 import numpy as np
 import torch
 import torch.optim as optim
 
+from . import matrix_functions
 import matrix_root as mr
 
 
@@ -69,7 +69,7 @@ class ShampooHyperParams:
   # Block size should be as large as feasible under memory/time constraints.
   block_size: int = 128
   # Automatic shape interpretation (for eg: [4, 3, 1024, 512] would result in
-  # 12 x [1024, 512] L and R statistics. Disabled by default which results in
+  # 12 x [1024, 512] L and R statistics. Disabled results in
   # Shampoo constructing statistics [4, 4], [3, 3], [1024, 1024], [512, 512].
   best_effort_shape_interpretation: bool = True
   # Type of grafting (SGD or AdaGrad).
@@ -261,8 +261,8 @@ class Preconditioner:
       self.preconditioners = []
     else:
       eps = self._hps.matrix_eps
-      self.statistics = [eps * torch.eye(s[0], device=device) for s in shapes]
-      self.preconditioners = [torch.eye(s[0], device=device) for s in shapes]
+      self.statistics = [eps * torch.eye(s[0], device=device).type_as(var) for s in shapes]
+      self.preconditioners = [torch.eye(s[0], device=device).type_as(var) for s in shapes]
 
   @torch.no_grad()
   def add_statistics(self, grad):
@@ -291,14 +291,15 @@ class Preconditioner:
     return 2 * len(self._transformed_shape)
 
   @torch.no_grad()
-  def compute_preconditioners(self):
+  def compute_preconditioners(self, **kwargs):
     """Compute L^{-1/exp} for each stats matrix L."""
     exp = self.exponent_for_preconditioner()
     eps = self._hps.matrix_eps
     for i, stat in enumerate(self.statistics):
-      #self.preconditioners[i] = matrix_functions.ComputePower(
-      #    stat, exp, ridge_epsilon=eps)
-      self.preconditioners[i] = mr.matrix_power_svd(stat + eps * torch.eye(stat.size()[0]), 1/exp)
+      if self.preconditioners[i].device.type == 'cpu':
+        self.preconditioners[i] = mr.matrix_power_svd(stat + eps * torch.eye(stat.size()[0]), -1/exp)
+      else:
+        self.preconditioners[i] = matrix_functions.ComputePower(stat, exp, ridge_epsilon=eps)
 
   @torch.no_grad()
   def preconditioned_grad(self, grad):
@@ -385,7 +386,7 @@ class Shampoo(optim.Optimizer):
         if state[STEP] % hps.statistics_compute_steps == 0:
           preconditioner.add_statistics(grad)
         if state[STEP] % hps.preconditioning_compute_steps == 0:
-          preconditioner.compute_preconditioners()
+          preconditioner.compute_preconditioners(step=state[STEP])
 
         # Precondition gradients
         graft_grad = graft.precondition_gradient(grad)
