@@ -2,5 +2,5 @@ from .shampoo import (
     Shampoo, ShampooHyperParams,
     Preconditioner,
     STEP, MOMENTUM, PRECONDITIONER, GRAFT,
-    LayerwiseGrafting, AdagradGraft, SGDGraft, Graft
+    LayerwiseGrafting, AdamGraft, AdagradGraft, SGDGraft, Graft
 )

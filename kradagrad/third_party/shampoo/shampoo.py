@@ -1,7 +1,9 @@
 # --- Note from Kradagrad authors ---
 # Besides this note, this file is a lightly modified version of the official Shampoo implementation
 #   at the time of access and is included in this repository for convenience. The edits are for 
-#   breaking deprecattions in pytorch, graph simplification, and half-precision training.
+#   1) breaking deprecattions in pytorch,
+#   2) half-precision training,
+#   3) Adam grafting
 #     URL: https://github.com/google-research/google-research/blob/master/scalable_shampoo/pytorch/shampoo.py
 #     commit: ccc94ce
 #     accessed: 2022_11_22
@@ -48,6 +50,7 @@ class LayerwiseGrafting(enum.IntEnum):
   NONE = 0
   SGD = 1
   ADAGRAD = 2
+  ADAM = 3
 
 
 @dataclass
@@ -137,6 +140,26 @@ class AdagradGraft(SGDGraft):
   def precondition_gradient(self, grad):
     return grad.detach() / (torch.sqrt(self.statistics) + self.hps.diagonal_eps)
 
+
+class AdamGraft(SGDGraft):
+  """Graft using Adam.
+
+  Implementation of Adagrad with momentum in both moments.
+  """
+
+  @torch.no_grad()
+  def __init__(self, hps, var):
+    super(AdamGraft, self).__init__(hps, var)
+    self.statistics = torch.zeros_like(var.data, device=var.device)
+
+  @torch.no_grad()
+  def add_statistics(self, grad):
+    grad = grad.detach()
+    self.statistics.mul_(self.hps.beta2).add_(grad * grad)
+
+  @torch.no_grad()
+  def precondition_gradient(self, grad):
+    return grad.detach() / (torch.sqrt(self.statistics) + self.hps.diagonal_eps)
 
 class BlockPartitioner:
   """Partitions a tensor into smaller tensors for preconditioning.
@@ -339,7 +362,6 @@ GRAFT = 'graft'
 
 class Shampoo(optim.Optimizer):
   """The Shampoo optimizer."""
-  @torch.no_grad()
   def __init__(self,
                params,
                lr=1.0,
@@ -347,6 +369,7 @@ class Shampoo(optim.Optimizer):
                hyperparams=ShampooHyperParams()):
     defaults = dict(lr=lr, momentum=momentum)
     self.hps = hyperparams
+    self.initialized = False
     super(Shampoo, self).__init__(params, defaults)
 
   @torch.no_grad()
@@ -382,9 +405,15 @@ class Shampoo(optim.Optimizer):
         graft = state[GRAFT]
 
         # Gather statistics, compute preconditioners
+        
         graft.add_statistics(grad)
+        
         if state[STEP] % hps.statistics_compute_steps == 0:
-          preconditioner.add_statistics(grad)
+          try:
+            preconditioner.add_statistics(grad)
+          except ValueError as err:
+            print('param', p)
+            raise err
         if state[STEP] % hps.preconditioning_compute_steps == 0:
           preconditioner.compute_preconditioners(step=state[STEP])
 
@@ -420,3 +449,4 @@ class Shampoo(optim.Optimizer):
 
         # Final update
         p.data.add_(momentum_update, alpha=-lr)
+        
