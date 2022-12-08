@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 import torch
 from torch.optim.optimizer import Optimizer
 
-import matrix_root as mr
+import positive_matrix_functions as mf
 
 def roundup(p, m):
     # how many groups of m are in p?

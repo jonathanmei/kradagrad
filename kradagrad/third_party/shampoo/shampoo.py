@@ -1,10 +1,13 @@
 # --- Note from Kradagrad authors ---
-# Besides this note, this file is a lightly modified version of the official Shampoo implementation
-#   at the time of access and is included in this repository for convenience. The edits are for 
-#   1) breaking deprecattions in pytorch,
-#   2) half-precision training,
+# This file is a lightly modified version of the official Shampoo pytorch 
+#  implementation and is included here for convenience. 
+#  In no particular order, the edits are for:
+#   1) Breaking deprecations in pytorch
+#   2) Half-precision training
 #   3) Adam grafting
-#     URL: https://github.com/google-research/google-research/blob/master/scalable_shampoo/pytorch/shampoo.py
+#   4) Optimizer initialization allowing more keyword arguments
+#   5) Custom preconditioning
+# URL: https://github.com/google-research/google-research/blob/master/scalable_shampoo/pytorch/shampoo.py
 #     commit: ccc94ce
 #     accessed: 2022_11_22
 # ----------- End of note -----------
@@ -38,7 +41,7 @@ import torch
 import torch.optim as optim
 
 from . import matrix_functions
-import matrix_root as mr
+import positive_matrix_functions as mf
 
 
 # Grafting is a technique to fix the layerwise scale of Shampoo optimizer.
@@ -266,7 +269,7 @@ class Preconditioner:
   """Compute statistics/shape from gradients for preconditioning."""
 
   @torch.no_grad()
-  def __init__(self, var, hps):
+  def __init__(self, var, hps, eps_override=None, **kwargs):
     self._hps = hps
     self._original_shape = var.shape
     self._transformed_shape = var.shape
@@ -283,9 +286,9 @@ class Preconditioner:
       self.statistics = []
       self.preconditioners = []
     else:
-      eps = self._hps.matrix_eps
-      self.statistics = [eps * torch.eye(s[0], device=device).type_as(var) for s in shapes]
-      self.preconditioners = [torch.eye(s[0], device=device).type_as(var) for s in shapes]
+      eps = self._hps.matrix_eps if eps_override is None else eps_override
+      self.statistics = [eps * torch.eye(s[0], device=device).type(torch.float32) for s in shapes]
+      self.preconditioners = [torch.eye(s[0], device=device).type(torch.float32) for s in shapes]
 
   @torch.no_grad()
   def add_statistics(self, grad):
@@ -320,16 +323,17 @@ class Preconditioner:
     eps = self._hps.matrix_eps
     for i, stat in enumerate(self.statistics):
       if self.preconditioners[i].device.type == 'cpu':
-        self.preconditioners[i] = mr.matrix_power_svd(stat + eps * torch.eye(stat.size()[0]), -1/exp)
+        self.preconditioners[i] = mf.matrix_power_svd(stat + eps * torch.eye(stat.size()[0]), -1/exp)
       else:
         self.preconditioners[i] = matrix_functions.ComputePower(stat, exp, ridge_epsilon=eps)
 
   @torch.no_grad()
-  def preconditioned_grad(self, grad):
+  def preconditioned_grad(self, grad, statistics_unmerged=False):
     """Precondition the gradient.
 
     Args:
       grad: A gradient tensor to precondition.
+      statistics_unmerged: if `True`, precondition with `statistics` and return unmerged
 
     Returns:
       A preconditioned gradient.
@@ -340,18 +344,25 @@ class Preconditioner:
     preconditioned_partitioned_grads = []
     num_splits = self._partitioner.num_splits()
     for i, grad in enumerate(partitioned_grads):
-      preconditioners_for_grad = self.preconditioners[i * num_splits:(i + 1) *
-                                                      num_splits]
+      mats = self.statistics if statistics_unmerged else self.preconditioners
+      preconditioners_for_grad = mats[i * num_splits:(i + 1) * num_splits]
       rank = len(grad.shape)
       precond_grad = grad
       for j in range(rank):
         preconditioner = preconditioners_for_grad[j]
-        precond_grad = torch.tensordot(
+        precond_grad_ = torch.tensordot(
             precond_grad, preconditioner, [[0], [0]])
+        if 'debug' in self.__dict__ and self.debug and not precond_grad.isfinite().all():
+            print(j, 'precon', preconditioner, '\nprecond_grad (before)', precond_grad, '\nprecond_grad (after)', precond_grad_)
+            raise ValueError('precond_grad broke')
+        precond_grad = precond_grad_
       preconditioned_partitioned_grads.append(precond_grad)
-    merged_grad = self._partitioner.merge_partitions(
-        preconditioned_partitioned_grads)
-    return torch.reshape(merged_grad, self._original_shape)
+    if not statistics_unmerged:
+      merged_grad = self._partitioner.merge_partitions(
+          preconditioned_partitioned_grads)
+      return torch.reshape(merged_grad, self._original_shape)
+    else:
+        return preconditioned_partitioned_grads
 
 
 STEP = 'step'
@@ -366,10 +377,10 @@ class Shampoo(optim.Optimizer):
                params,
                lr=1.0,
                momentum=0.9,
-               hyperparams=ShampooHyperParams()):
+               hyperparams=ShampooHyperParams(),
+              **kwargs):
     defaults = dict(lr=lr, momentum=momentum)
     self.hps = hyperparams
-    self.initialized = False
     super(Shampoo, self).__init__(params, defaults)
 
   @torch.no_grad()
@@ -415,7 +426,7 @@ class Shampoo(optim.Optimizer):
             print('param', p)
             raise err
         if state[STEP] % hps.preconditioning_compute_steps == 0:
-          preconditioner.compute_preconditioners(step=state[STEP])
+          preconditioner.compute_preconditioners()
 
         # Precondition gradients
         graft_grad = graft.precondition_gradient(grad)

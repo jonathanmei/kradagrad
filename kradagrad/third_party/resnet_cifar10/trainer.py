@@ -43,6 +43,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             input_var = input_var.half()
 
         # compute output
+        #with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
         output = model(input_var)
         loss = criterion(output, target_var)
 
@@ -87,6 +88,7 @@ def validate(val_loader, model, criterion, args):
                 input_var = input_var.half()
 
             # compute output
+            #with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             output = model(input_var)
             loss = criterion(output, target_var)
 

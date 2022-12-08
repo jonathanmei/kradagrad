@@ -14,7 +14,7 @@ def _mat_fro_norm(A):  # torch's version is incorrect
 def _mat_inf_norm(A):
     return torch.abs(A).sum(dim=-1).max(dim=-1)[0]
 
-def _matrices_norm(A, norm: str='inf'):
+def matrices_norm(A, norm: str='inf'):
     if norm == 'inf':  # decently tight bound on largest eig for diag dom
         A_norm = _mat_inf_norm(A)
     elif norm == 'fro':  # looser bound on largest eig
@@ -23,6 +23,9 @@ def _matrices_norm(A, norm: str='inf'):
         A_norm = torch.stack([torch.trace(a) for a in A])
     return A_norm
 
+def symmetrize(A):
+    return (A + A.transpose(-2, -1)) / 2
+
 def _matrices_info(A: torch.Tensor, norm: str='inf'):
     # check if A is 3D, return size and norm
     A_sz = A.size()
@@ -30,17 +33,17 @@ def _matrices_info(A: torch.Tensor, norm: str='inf'):
     if A_dim < 3:
         caller = sys._getframe(1).f_code.co_name
         raise ValueError("{} supports batches of matrices only! Input dim: {}".format(caller, A_dim))
-    A_norm = _matrices_norm(A, norm=norm)
+    A_norm = matrices_norm(A, norm=norm)
     A_norm = A_norm[..., None, None]
     A_dev = A.device
 
     return A_sz, A_dim, A_norm, A_dev
 
 def _batcher(batch_size: int, M: torch.Tensor):
-    return M.unsqueeze(0).repeat([batch_size, 1, 1])
+    return M.unsqueeze(0).expand([batch_size, -1, -1])
 
 def mat_pow(A: torch.Tensor, p: int):
-    # performs A^p using O(log_2(p)) matmuls
+    # performs A^p on symmetric matrices using O(log_2(p)) matmuls
     if p < 1:
         raise ValueError("mat_pow only valid for positive integer powers!")
     if p == 1:
@@ -88,12 +91,15 @@ def mat_root(A, p, A_p=None, **kwargs):
 
 def matrix_inv_warm(A: torch.Tensor, A_p: torch.Tensor=None, tol: float=1e-6, iters: int=10, norm='inf', debug: bool=False) -> torch.Tensor:
     # Newton method for inverting A
+    orig_type = A.dtype
+    A = A.type(torch.float32)
     A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
     A_batch = A_sz[0]
 
     Z = A
     I = torch.eye(*A_sz[-2:], device=A_dev).type_as(A)
     I = _batcher(A_batch, I)
+    I2 = 2 * I
     if A_p is None:
         A_p = A.transpose(-2, -1)
     X = A_p / A_norm
@@ -103,12 +109,13 @@ def matrix_inv_warm(A: torch.Tensor, A_p: torch.Tensor=None, tol: float=1e-6, it
             if debug:
                 print('warning: inv iterations unstable')
             break
-        X = X.bmm(2*I - Y)
-        if _matrices_norm(Y - I, norm=norm).max() < tol:
+        X = X.bmm(I2 - Y)
+        #X = torch.baddbmm(X, X, Y, beta=2, alpha=-1)
+        if matrices_norm(Y - I, norm=norm).max() < tol:
             if debug:
                 print('inv quit after {} iter'.format(it_ + 1))
             break
-    return X
+    return X.type(orig_type)
 
 def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor=None, tol: float=1e-6, iters: int=20, norm: str='inf', inner_tol: float=1e-6, inner_iters: int=10, debug: bool=False) -> torch.Tensor:
     # Coupled Newton iterations to compute A^(1/p) for even p
@@ -116,6 +123,8 @@ def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor=None, tol
     # Uses either inner Newton iterations to compute inverse or Cholesky solver to apply
     if p % 2 != 0:
         raise ValueError("matrix_even_root_N_warm only supports even roots! p: {}".format(p))
+    orig_type = A.dtype
+    A = A.type(torch.float32)
     A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
     A_batch = A_sz[0]
 
@@ -140,14 +149,15 @@ def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor=None, tol
     #        Xp2_LD, Xp2_pivot,
     #        torch.linalg.ldl_solve(Xp2_LD, Xp2_pivot, Z).transpose(-2, -1)
     #    )
+    Ip_1 = I * (p - 1)
     for i_ in range(iters):
-        IM_p = (I * (p - 1) + M) / p
+        IM_p = (Ip_1 + M) / p
         if i_ % 2 == 0:
             X = X.bmm(IM_p)
         else:
             X = IM_p.bmm(X)
-        X = (X + X.transpose(-2, -1)) / 2
-        if _matrices_norm(IM_p - I, norm=norm).max() < tol:
+        X = symmetrize(X)
+        if matrices_norm(IM_p - I, norm=norm).max() < tol:
             if debug:
                 print('root exit early after {} iter'.format(i_ + 1))
             break
@@ -168,42 +178,43 @@ def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor=None, tol
             #        torch.linalg.ldl_solve(IM_pp2_LD, IM_pp2_pivot, M).transpose(-2, -1)
             #    )
             M = M_
-    return X * A_norm_p
+    return (X * A_norm_p).type(orig_type)
 
-def matrix_sqrt_NS(A: torch.Tensor, iters: int=25, tol: float=1e-5, batched: bool=False, norm: str='inf', debug: bool=False) -> torch.Tensor:
+def matrix_sqrt_NS(A: torch.Tensor, iters: int=25, tol: float=1e-5, batched: bool=False, norm: str='inf', debug: bool=False, verbose: bool=False,**kwargs) -> torch.Tensor:
     # 3D batch of matrices only
     # Newton Schulz iterations; converge quadratically, but no warm start
+    orig_type = A.dtype
+    A = A.type(torch.float32)
     A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
     A_batch = A_sz[0]
 
     Y = A / A_norm
     Z = torch.eye(*A_sz[-2:], device=A_dev).type_as(A)
-    eye3 = 3 * torch.eye(*A_sz[-2:], device=A_dev).type_as(A)
+    I = torch.eye(*A_sz[-2:], device=A_dev).type_as(A)
+    eye3 = 3 * I
 
     # deal with batch dimension:
     Z = _batcher(A_batch, Z)
+    I = _batcher(A_batch, I)
     eye3 = _batcher(A_batch, eye3)
 
     for it_ in range(iters):
-        X = 0.5 * (eye3 - Z.bmm(Y))
+        #X = 0.5 * (eye3 - Z.bmm(Y))
+        X = torch.baddbmm(eye3, Z, Y, beta=0.5, alpha=-0.5)
         if it_ < iters - 1:
-            if batched:  # if we have extra memory
-                U = torch.cat([Y, X])
-                V = torch.cat([X, Z])
-                W = U.bmm(V)
-                Y = W[:A_batch]
-                Z = W[A_batch:]
-            else:
-                Y = Y.bmm(X)
-                Z = X.bmm(Z)
-        else:
-            Y = Y.bmm(X)
-        if _matrices_norm(X - I, norm).max() < tol:
-            if debug:
+            Z = X.bmm(Z)
+            Z = symmetrize(Z)
+        Y = Y.bmm(X)
+        Y = symmetrize(Y)
+        if debug and (not Y.isfinite().all() or not Z.isfinite().all()):
+            print(it_, '||A||', A_norm, '\nX', X, '\nZ', Z, '\nY', Y)
+            raise ValueError('matrix_sqrt_NS broke')
+        if matrices_norm(X - I, norm).max() < tol:
+            if verbose:
                 print('mat sqrt NS exit early after {} iters'.format(it_ + 1))
             break
     Y = Y * (A_norm ** (0.5))
-    return Y
+    return Y.type(orig_type)
 
 def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=100, norm: str='inf', accel: str='line') -> torch.Tensor:
     # 3D batch of matrices only
@@ -226,6 +237,7 @@ def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=100,
             #    = argmin_t || C + L*t + Q*t^2 ||_F^2
 
             X1 = (A + X.bmm(X)) / 2
+            #X1 = torch.baddbmm(A, X, X, beta=0.5, alpha=0.5)
             Del = X1 - X
             XmI = X - eyes
             Del_norm = torch.linalg.matrix_norm(Del, ord=2)
@@ -262,6 +274,7 @@ def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=100,
                 X = X1
         else:
             X = (A + X.bmm(X)) / 2
+            #X = torch.baddbmm(A, X, X, beta=0.5, alpha=0.5)
     return (eyes - X) * L_norm_sqrt
 
 def matrix_power_svd(matrix: torch.Tensor, power: float) -> torch.Tensor:
