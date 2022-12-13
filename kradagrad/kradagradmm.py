@@ -45,7 +45,7 @@ class KrADmmPreconditioner(Preconditioner):
         if not self.statistics: return
         grad = grad.type(torch.float32)
         partitioned_grads = self.partition_grad(grad)
-        partitioned_precon_grads = self.preconditioned_grad(grad, statistics_unmerged=True)
+        partitioned_precon_grads = self.preconditioned_grad(grad, statistics=True, unmerged=True)
         w1 = self._hps.beta2
         damping = self._hps.matrix_eps > 0
         rank = len(self._transformed_shape)
@@ -53,23 +53,29 @@ class KrADmmPreconditioner(Preconditioner):
         for j, (grad_, precon_grad_) in enumerate(zip(partitioned_grads, partitioned_precon_grads)):
             axes = list(range(i)) + list(range(i + 1, rank))
             stat = self.statistics[j*rank + i]
+            precon = self.preconditioners[j*rank + i]
             if w1 < 1:
                 stat.mul_(1/w1)
 
             lgrgt = torch.tensordot(precon_grad_, grad_, [axes, axes])
             if self.debug and not lgrgt.isfinite().all():
-                print('lgrgt', lgrgt, '\nprecon_grad', precon_grad_, '\nstat', stat_, '\ngrad', grad_)
+                print('self.updated', self.updated, '\nlgrgt', lgrgt, '\nprecon_grad', precon_grad_, '\nstat', stat_)
                 raise ValueError('lgrgt broke')
 
             if damping:
-                I_epsL = torch.eye(stat.size()[0], device=stat.device) - self._hps.matrix_eps * stat
+                eps = self._hps.matrix_eps
+
+                stat2eps = stat.mm(stat.T.mul(-eps))
+                stat_prime = stat + stat2eps
+
+                lgrgt_2eps = stat.mm(lgrgt.mul(-eps))
+                lgrgt_prime = lgrgt + lgrgt_2eps
                 
-                lgrgt_prime = I_epsL.mm(lgrgt)
-                stat_prime = I_epsL.mm(stat)
                 if self.debug and (not lgrgt_prime.isfinite().all() or not stat_prime.isfinite().all()):
-                    print('lgrgt_prime', lgrgt_prime, '\nI_epsL', I_epsL, '\nstat_prime', stat_prime)
-                    raise ValueError('lgrgt_prime broke')
+                    print('self.updated', self.updated, '\nlgrgt_prime', lgrgt_prime, '\nstat_prime', stat_prime, '\nstat', stat, '\nprecon', precon, '\ngrad', grad_, '\nprecon_grad', precon_grad_)
+                    raise ValueError('damping broke')
                 lgrgt = lgrgt_prime
+                #stat = mf.symmetrize(stat_prime)
                 stat = stat_prime
 
             # damping
@@ -79,8 +85,7 @@ class KrADmmPreconditioner(Preconditioner):
             if self.debug and not DX.isfinite().all():
                 print('DX', DX, '\nlgrgt', lgrgt)
                 raise ValueError('DX broke')
-            DX = mf.symmetrize(DX)
-            self.statistics[j*rank + i] = stat.add(DX)
+            self.statistics[j*rank + i] = stat + DX
 
     @torch.no_grad()
     def compute_preconditioners(self, **kwargs):
@@ -88,19 +93,19 @@ class KrADmmPreconditioner(Preconditioner):
         exp = self.exponent_for_preconditioner()
         for i in list(self.updated):
             stat = self.statistics[i]
-            if stat.device.type == 'cpu':
-                try:
+            try:
+                if stat.device.type == 'cpu':
                     self.preconditioners[i] = mf.matrix_power_svd(stat, 1 / exp) if exp > 1 else stat
-                except Exception as err:
-                    if self.debug:
-                        print('stat', stat)
-                    raise err
-            else:
-                self.preconditioners[i] = mf.mat_root(
-                    stat[None, ...], exp,
-                    self.preconditioners[i][None, ...],
-                    iters=8, tol=1e-4,
-                )[0]  # mf.mat_root operates on batches
+                else:
+                    self.preconditioners[i] = mf.mat_root(
+                        stat[None, ...], exp,
+                        self.preconditioners[i][None, ...],
+                        iters=12, tol=1e-4,# debug=True
+                    )[0]  # mf.mat_root operates on batches
+            except Exception as err:
+                if self.debug:
+                    print('stat', stat, '\nmat_root broke')
+                raise err
         self.updated = set()
 
     @torch.no_grad()

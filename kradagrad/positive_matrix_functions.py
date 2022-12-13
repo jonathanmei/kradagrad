@@ -24,7 +24,7 @@ def matrices_norm(A, norm: str='inf'):
     return A_norm
 
 def symmetrize(A):
-    return (A + A.transpose(-2, -1)) / 2
+    return A / 2 + A.transpose(-2, -1) / 2
 
 def _matrices_info(A: torch.Tensor, norm: str='inf'):
     # check if A is 3D, return size and norm
@@ -109,8 +109,8 @@ def matrix_inv_warm(A: torch.Tensor, A_p: torch.Tensor=None, tol: float=1e-6, it
             if debug:
                 print('warning: inv iterations unstable')
             break
-        X = X.bmm(I2 - Y)
-        #X = torch.baddbmm(X, X, Y, beta=2, alpha=-1)
+        #X = X.bmm(I2 - Y)
+        X = torch.baddbmm(X, X, Y, beta=2, alpha=-1)
         if matrices_norm(Y - I, norm=norm).max() < tol:
             if debug:
                 print('inv quit after {} iter'.format(it_ + 1))
@@ -196,10 +196,11 @@ def matrix_sqrt_NS(A: torch.Tensor, iters: int=25, tol: float=1e-5, batched: boo
     # deal with batch dimension:
     Z = _batcher(A_batch, Z)
     I = _batcher(A_batch, I)
+    I_norm = matrices_norm(I, norm)
     eye3 = _batcher(A_batch, eye3)
-
+    last_norm = float('inf')
     for it_ in range(iters):
-        #X = 0.5 * (eye3 - Z.bmm(Y))
+        #X = 0.5 * eye3 - Z.bmm(0.5 * Y)
         X = torch.baddbmm(eye3, Z, Y, beta=0.5, alpha=-0.5)
         if it_ < iters - 1:
             Z = X.bmm(Z)
@@ -209,10 +210,12 @@ def matrix_sqrt_NS(A: torch.Tensor, iters: int=25, tol: float=1e-5, batched: boo
         if debug and (not Y.isfinite().all() or not Z.isfinite().all()):
             print(it_, '||A||', A_norm, '\nX', X, '\nZ', Z, '\nY', Y)
             raise ValueError('matrix_sqrt_NS broke')
-        if matrices_norm(X - I, norm).max() < tol:
+        this_norm = matrices_norm(X - I, norm).max()
+        if this_norm / I_norm < tol or (this_norm > last_norm * 1.2):
             if verbose:
                 print('mat sqrt NS exit early after {} iters'.format(it_ + 1))
             break
+        last_norm = this_norm
     Y = Y * (A_norm ** (0.5))
     return Y.type(orig_type)
 
@@ -236,8 +239,8 @@ def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=100,
             #  t = argmin_t || [I - (X + t*D)]^2 - (I - A) ||_F^2
             #    = argmin_t || C + L*t + Q*t^2 ||_F^2
 
-            X1 = (A + X.bmm(X)) / 2
-            #X1 = torch.baddbmm(A, X, X, beta=0.5, alpha=0.5)
+            #X1 = (A + X.bmm(X)) / 2
+            X1 = torch.baddbmm(A, X, X, beta=0.5, alpha=0.5)
             Del = X1 - X
             XmI = X - eyes
             Del_norm = torch.linalg.matrix_norm(Del, ord=2)
@@ -273,8 +276,8 @@ def matrix_sqrt_warm(L: torch.Tensor, L_sqrt_init: torch.Tensor, iters: int=100,
             except:
                 X = X1
         else:
-            X = (A + X.bmm(X)) / 2
-            #X = torch.baddbmm(A, X, X, beta=0.5, alpha=0.5)
+            #X = (A + X.bmm(X)) / 2
+            X = torch.baddbmm(A, X, X, beta=0.5, alpha=0.5)
     return (eyes - X) * L_norm_sqrt
 
 def matrix_power_svd(matrix: torch.Tensor, power: float) -> torch.Tensor:

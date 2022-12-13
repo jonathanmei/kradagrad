@@ -328,7 +328,7 @@ class Preconditioner:
         self.preconditioners[i] = matrix_functions.ComputePower(stat, exp, ridge_epsilon=eps)
 
   @torch.no_grad()
-  def preconditioned_grad(self, grad, statistics_unmerged=False):
+  def preconditioned_grad(self, grad, statistics=False, unmerged=False):
     """Precondition the gradient.
 
     Args:
@@ -344,7 +344,7 @@ class Preconditioner:
     preconditioned_partitioned_grads = []
     num_splits = self._partitioner.num_splits()
     for i, grad in enumerate(partitioned_grads):
-      mats = self.statistics if statistics_unmerged else self.preconditioners
+      mats = self.statistics if statistics else self.preconditioners
       preconditioners_for_grad = mats[i * num_splits:(i + 1) * num_splits]
       rank = len(grad.shape)
       precond_grad = grad
@@ -353,11 +353,11 @@ class Preconditioner:
         precond_grad_ = torch.tensordot(
             precond_grad, preconditioner, [[0], [0]])
         if 'debug' in self.__dict__ and self.debug and not precond_grad.isfinite().all():
-            print(j, 'precon', preconditioner, '\nprecond_grad (before)', precond_grad, '\nprecond_grad (after)', precond_grad_)
+            print(i, j, 'precon', preconditioner, '\nprecond_grad (before)', precond_grad, '\nprecond_grad (after)', precond_grad_)
             raise ValueError('precond_grad broke')
         precond_grad = precond_grad_
       preconditioned_partitioned_grads.append(precond_grad)
-    if not statistics_unmerged:
+    if not unmerged:
       merged_grad = self._partitioner.merge_partitions(
           preconditioned_partitioned_grads)
       return torch.reshape(merged_grad, self._original_shape)
