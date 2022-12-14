@@ -88,7 +88,8 @@ class KrADPreconditioner(Preconditioner):
             else:
                 self.preconditioners[i] = mf.mat_root(
                     stat[None, ...], exp,
-                    self.preconditioners[i][None, ...],
+                    #self.preconditioners[i][None, ...],
+                    None,
                     iters=8, tol=1e-4, inner_iters=4, inner_tol=1e-3
                 )[0]  # mf.mat_root operates on batches
 
@@ -129,10 +130,11 @@ class KradagradPP(Shampoo):
         # group by exponent for batching
         # we can further improve by sorting by size, but that requires advanced bookkeeping
         prec = KrADPreconditioner(var, self.hps, eps_override=1.0)
-        exp = prec.exponent_for_preconditioner()
-        self.param_master_dict[exp].append(var)
-        self.stat_master_dict[exp].append(prec.statistics)
-        self.cond_master_dict[exp].append(prec.preconditioners)
+        if not self.cpu:
+            exp = prec.exponent_for_preconditioner()
+            # append or extend?:
+            self.stat_master_dict[exp].append(prec.statistics)
+            self.cond_master_dict[exp].append(prec.preconditioners)
 
         # original, pared down        
         var = var.detach()
@@ -148,12 +150,13 @@ class KradagradPP(Shampoo):
     # reimplementation for batch processing on gpu
     @torch.no_grad()
     def step(self, closure=None):
-        if self.cpu:
+        if self.cpu or not self.cpu:  # until batch processing is complete
             super().step(closure)
             return
-        hps = self.hps
+
         # GPU batch processing, currently no grafting
-        # we can still initialize individually
+
+        # we can still initialize in series
         if not self.initialized:
             for group in self.param_groups:
                 lr = group['lr']
@@ -163,36 +166,36 @@ class KradagradPP(Shampoo):
                         self.init_var_state(p, state)
             self.initialized = True
         for group in self.param_groups:
-            lr = group['lr']
             partitioned_grads_dict = defaultdict(list)
             for p in group['params']:
                 if p.grad is None: continue
                 prec = self.state[p]
                 exp = prec.exponent_for_preconditioner()
                 partitioned_grads_dict[exp].append(prec.partition_grads(p.grad.detach()))
-                
-            self._step += 1
 
             # batch processing
-            if self._step % hps.statistics_compute_steps == 0:
+            if self._step % self.hps.statistics_compute_steps == 0:
                 self.batch_add_statistics(partitioned_grads_dict)
-            if self._step % hps.preconditioning_compute_steps == 0:
+            if self._step % self.hps.preconditioning_compute_steps == 0:
                 self.batch_compute_preconditioners(step=self.step)
+        self._step += 1
+        # back to series processing (easier, not as much gain from batched)
+        for group in self.param_groups:
+            lr = group['lr']
 
-            # apply them in batch too
-            krad_partitioned_grads_dict = partitioned_grads_dict
-            if self._step >= self.hps.start_preconditioning_step:
-                krad_partitioned_grads_dict = self.batch_preconditioned_grad(partitioned_grads_dict)
-            krad_grad_dict = self.batch_merge_partitions(krad_partitioned_grads_dict)
-            krad_grad_list = self.unbatch(krad_grad_dict)
-
-
-            ## Do in series (easier, not as much gain from batched)
-            for ix, p in enumerate(group['params']):
+            for p in group['params']:
+                grad = p.grad.detach()
                 state = self.state[p]
+                precon = state[PRECONDITIONER]
+
+                krad_grad = grad
+                # Precondition
+                if self._step >= self.hps.start_preconditioning_step:
+                    krad_grad = precon.preconditioned_grad(grad)
+
                 # Weight decay
                 if self.hps.weight_decay != 0.0:
-                    krad_grad_list[ix].add_(p.data, alpha=hps.weight_decay)
+                    krad_grad.add_(p.data, alpha=self.hps.weight_decay)
 
                 # Momentum and Nesterov momentum, if needed
                 state[MOMENTUM].mul_(group['momentum']).add_(krad_grad_list[ix])
@@ -200,19 +203,40 @@ class KradagradPP(Shampoo):
                 momentum_update = state[MOMENTUM]
                 wd_update = krad_grad_list[ix]
 
-                if hps.nesterov:
+                if self.hps.nesterov:
                     momentum_update.mul_(group['momentum']).add_(wd_update)
 
                 # Final update
                 p.data.add_(momentum_update, alpha=-lr)
 
+    # TODO batch processing
     def batch_add_statistics(self, partitioned_grads_dict):
         pass
     
-    # TODO batch processing
     def batch_compute_preconditioners(self, step):
-        pass
+        bs = self.tensor_batch_size
+        for exp in self.stat_master_dict.keys():
+            stat_list = self.stat_master_dict[exp]
+            precon_list = self.cond_master_dict[exp]
+            n_stat = len(stat_list)
+            n_batch = n_stat // bs + int(n_stat % bs != 0)
+            for i in range(n_batch):
+                stats_this = stat_list[bs*i:bs*(i+1)]
+                precon_this = precon_list[bs*i:bs*(i+1)]
+                bs_ = len(stats_this)
+                sizes = [x.size()[0] for x in stats_this]
+                max_size = max(*sizes)
+                batch_stat = torch.zeros([bs_, max_size, max_size])
+                for j in range(bs_):
+                    batch_stat[j, 0:sizes[j], 0:sizes[j]] = stats_this[j]
+                batch_root = mf.mat_root(
+                    batch_stat, exp, None,  # skipping warm start
+                    iters=8, tol=1e-4, inner_iters=4, inner_tol=1e-3
+                )
+                for j in range(bs_):
+                    precon_this[j].copy_(batch_root[j, 0:sizes[j], 0:sizes[j]])
     
+    # future work
     def batch_preconditioned_grad():
         pass
     
@@ -221,3 +245,6 @@ class KradagradPP(Shampoo):
     
     def unbatch():
         pass
+
+def _slicer(tensor):
+    return [slice(0, x) for x in tensor.size()]

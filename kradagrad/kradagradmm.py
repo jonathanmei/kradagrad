@@ -1,6 +1,7 @@
 ## Simple Kradagrad-- that extends official unoptimized Shampoo implementation
 
 from collections import defaultdict
+import math
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 import torch
@@ -31,8 +32,9 @@ class KrADmmPreconditioner(Preconditioner):
     @torch.no_grad()
     def exponent_for_preconditioner(self):
         """Returns exponent to use for pth root M^{1/p}.
+        If `inverse_exponent_override` is set, use ONS-style update
         """
-        return 2
+        return 2 if self._hps.inverse_exponent_override == 0 else 1
 
     @torch.no_grad()
     def add_statistic(self, grad, i):
@@ -165,7 +167,17 @@ class KradagradMM(Shampoo):
 
                 # Compute stats and preconditioners
                 if self._step % hps.statistics_compute_steps == 0:
-                    ix = self._step % len(prec._transformed_shape)
+                    if self._step < len(prec._transformed_shape) ** 2:
+                        # simple equal updating schedule:
+                        ix = self._step % len(prec._transformed_shape)
+                    else:
+                        # O(k^0.5) for everything except largest dim
+                        max_dim = max(prec._transformed_shape)
+                        max_dim_ix = [j for (j, x) in enumerate(prec._transformed_shape) if x == max_dim][0]
+                        step_sqrt_floor = int(math.sqrt(self._step))
+                        exceed = self._step - step_sqrt_floor ** 2
+                        ix = exceed if exceed < len(prec._transformed_shape) else max_dim_ix
+
                     prec.add_statistic(grad, ix)
                 if self._step % hps.preconditioning_compute_steps == 0:
                     prec.compute_preconditioners()
