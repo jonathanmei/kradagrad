@@ -13,7 +13,6 @@ def solve_smallest(a, b, c, d, thr=-float('inf')):
     # input shapes: (n, )
     # output shape: (n, )
 
-    # TODO: vectorize
     f = findF(a, b, c)
     g = findG(a, b, c, d)
     h = findH(g, f)

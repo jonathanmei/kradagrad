@@ -7,8 +7,8 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 import torch
 from torch.optim.optimizer import Optimizer
 
-import positive_matrix_functions as mf
-from shampoo import (
+from . import positive_matrix_functions as mf
+from .third_party.shampoo import (
     Shampoo, Preconditioner,
     STEP, MOMENTUM, PRECONDITIONER, GRAFT,
     LayerwiseGrafting, AdamGraft, AdagradGraft, SGDGraft, Graft
@@ -185,8 +185,7 @@ class KradagradMM(Shampoo):
                 # Precondition
                 krad_grad = grad
                 if self._step >= self.hps.start_preconditioning_step:
-                    krad_grad = prec.preconditioned_grad(
-                        grad.type(torch.float32)).type_as(grad)
+                    krad_grad = prec.preconditioned_grad(grad)
 
                 # Weight decay
                 if self.hps.weight_decay != 0.0:

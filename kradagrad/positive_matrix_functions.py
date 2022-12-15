@@ -3,7 +3,7 @@ import sys
 import numpy as np
 import torch
 
-import cubic
+from .math_utils import cubic
 
 def batch_matricize(A, ix):
     return A.moveaxis(ix+1, 1).reshape([A.size()[0], A.size()[ix + 1], -1])
@@ -267,70 +267,3 @@ def matrix_power_svd(matrix: torch.Tensor, power: float) -> torch.Tensor:
     matrix = matrix.cpu()
     u, s, v = torch.svd(matrix)
     return (u @ s.pow_(power).diag() @ v.t()).to(device)
-
-"""
-def make_pade_rooter(n: int, m: int, l: int, norm: str='fro'):
-    # Uses pade approximation of order[m, l] to create a function
-    # that computes the nth root on a batch of matrices
-    # Nb. Not great compared to Newton or even Binomial w/ line search
-    f = lambda x: mpmath.root(1 - x, n)
-    a = mpmath.taylor(f, 0, m+l+4)
-    p, q = mpmath.pade(a, m, l)
-    pade_p, pade_q = [torch.Tensor(np.array(x).astype(float)) for x in [p, q]]
-
-    def matrix_rt_pade(A: torch.Tensor, pades) -> torch.Tensor:
-        # Heavily inspired by: https://github.com/KingJamesSong/FastDifferentiableMatSqrt
-        A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
-        A_batch = A_sz[0]
-
-        Y = A / A_norm
-        pade_p, pade_q = [x.to(A_dev) for x in pades]
-        I = torch.eye(*A_sz[-2:], device=A_dev)
-        I = _batcher(A_batch, I)
-
-        # # we might get underflow summing from large to small...
-        # # try multiplicative updates instead?
-        # p_rt = pade_p[0] * I
-        # q_rt = pade_q[0] * I
-        # X = I - Y
-        # X_pow = X
-        # for i_ in range(max(m, l)):
-        #     if i_ < m:
-        #         p_rt += pade_p[i_ + 1] * X_pow
-        #     if i_ < l:
-        #         q_rt += pade_q[i_ + 1] * X_pow
-        #     X_pow = X_pow.bmm(X)
-        #     X_pow = (X_pow + X_pow.transpose(-2, -1)) / 2
-        X = I - Y
-        if len(pade_p) > 0:
-            p_rt = pade_p[-1] * X
-        else:
-            p_rt = torch.zeros_like(X)
-        if len(pade_q) > 0:
-            q_rt = pade_q[-1] * X
-        else:
-            q_rt = torch.zeros_like(X)
-        for i_ in range(max(m, l)-1, 0, -1):
-            if i_ < m:
-                if i_ % 2 == 0:
-                    p_rt = pade_p[i_] * X + X.bmm(p_rt)
-                else:
-                    p_rt = pade_p[i_] * X + p_rt.bmm(X)
-            if i_ < l:
-                if i_ % 2 == 0:
-                    q_rt = pade_q[i_] * X + X.bmm(q_rt)
-                else:
-                    q_rt = pade_q[i_] * X + q_rt.bmm(X)
-        p_rt += pade_p[0] * I
-        q_rt += pade_q[0] * I
-
-        # Nb: experimental API! Pin version of pytorch==1.13
-        # cholesky: save 1/2 flops, numerically stable
-        q_LD, q_pivots, _ = torch.linalg.ldl_factor_ex(q_rt)
-        Y_rt = torch.linalg.ldl_solve(q_LD, q_pivots, p_rt)
-
-        A_rt = Y_rt * (A_norm ** (1./n))
-        return A_rt
-
-    return lambda x: matrix_rt_pade(x, (pade_p, pade_q))
-"""

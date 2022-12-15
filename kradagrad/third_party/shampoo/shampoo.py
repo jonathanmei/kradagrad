@@ -41,7 +41,7 @@ import torch
 import torch.optim as optim
 
 from . import matrix_functions
-import positive_matrix_functions as mf
+from ... import positive_matrix_functions as mf
 
 
 # Grafting is a technique to fix the layerwise scale of Shampoo optimizer.
@@ -114,7 +114,7 @@ class SGDGraft(Graft):
 
   @torch.no_grad()
   def __init__(self, hps, var):
-    super(SGDGraft, self).__init__(hps, var)
+    super().__init__(hps, var)
     self.momentum = torch.zeros_like(var.data, device=var.device)
 
   @torch.no_grad()
@@ -131,7 +131,7 @@ class AdagradGraft(SGDGraft):
 
   @torch.no_grad()
   def __init__(self, hps, var):
-    super(AdagradGraft, self).__init__(hps, var)
+    super().__init__(hps, var)
     self.statistics = torch.zeros_like(var.data, device=var.device)
 
   @torch.no_grad()
@@ -152,7 +152,7 @@ class AdamGraft(SGDGraft):
 
   @torch.no_grad()
   def __init__(self, hps, var):
-    super(AdamGraft, self).__init__(hps, var)
+    super().__init__(hps, var)
     self.statistics = torch.zeros_like(var.data, device=var.device)
 
   @torch.no_grad()
@@ -347,7 +347,8 @@ class Preconditioner:
       mats = self.statistics if statistics else self.preconditioners
       preconditioners_for_grad = mats[i * num_splits:(i + 1) * num_splits]
       rank = len(grad.shape)
-      precond_grad = grad
+      orig_type = grad.type()
+      precond_grad = grad.type(torch.float32)
       for j in range(rank):
         preconditioner = preconditioners_for_grad[j]
         precond_grad_ = torch.tensordot(
@@ -356,7 +357,7 @@ class Preconditioner:
             print(i, j, 'precon', preconditioner, '\nprecond_grad (before)', precond_grad, '\nprecond_grad (after)', precond_grad_)
             raise ValueError('precond_grad broke')
         precond_grad = precond_grad_
-      preconditioned_partitioned_grads.append(precond_grad)
+      preconditioned_partitioned_grads.append(precond_grad.type(orig_type))
     if not unmerged:
       merged_grad = self._partitioner.merge_partitions(
           preconditioned_partitioned_grads)
@@ -381,7 +382,7 @@ class Shampoo(optim.Optimizer):
               **kwargs):
     defaults = dict(lr=lr, momentum=momentum)
     self.hps = hyperparams
-    super(Shampoo, self).__init__(params, defaults)
+    super().__init__(params, defaults)
 
   @torch.no_grad()
   def init_var_state(self, var, state):
