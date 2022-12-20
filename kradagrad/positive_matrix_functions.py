@@ -78,6 +78,7 @@ def mat_root(A, p, A_p=None, **kwargs):
     inner_iters: if using Newton to compute inverses, iterations for those loops
     inner_tol: if using Newton to compute inverses, threshold for early terminating those loops
     norm: which normalization to use: {'inf', 'fro', 'tr'}
+    double: use 64-bit instead of 32-bit precision
     debug: print debugging info
     """
     if p == 1:
@@ -92,10 +93,10 @@ def mat_root(A, p, A_p=None, **kwargs):
     return X
 
 
-def matrix_inv_warm(A: torch.Tensor, A_p: torch.Tensor=None, tol: float=1e-6, iters: int=10, norm='inf', debug: bool=False) -> torch.Tensor:
+def matrix_inv_warm(A: torch.Tensor, A_p: torch.Tensor=None, tol: float=1e-6, iters: int=10, norm='inf', debug: bool=False, double: bool=False, **kwargs) -> torch.Tensor:
     # Newton method for inverting A
     orig_type = A.dtype
-    A = A.type(torch.float32)
+    A = A.type(torch.float64 if double else torch.float32)
     A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
     A_batch = A_sz[0]
 
@@ -120,14 +121,14 @@ def matrix_inv_warm(A: torch.Tensor, A_p: torch.Tensor=None, tol: float=1e-6, it
             break
     return X.type(orig_type)
 
-def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor=None, tol: float=1e-6, iters: int=20, norm: str='inf', inner_tol: float=1e-6, inner_iters: int=10, debug: bool=False) -> torch.Tensor:
+def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor=None, tol: float=1e-6, iters: int=20, norm: str='inf', inner_tol: float=1e-6, inner_iters: int=10, debug: bool=False, double: bool=False, **kwargs) -> torch.Tensor:
     # Symmetric coupled Newton iterations to compute A^(1/p) for even p
     # X_p: initial guess of A^(1/p). If `None`, use I
     # Uses Newton iterations to compute inverse in an inner loop
     if p % 2 != 0:
         raise ValueError("matrix_even_root_N_warm only supports even roots! p: {}".format(p))
     orig_type = A.dtype
-    A = A.type(torch.float32)
+    A = A.type(torch.float64 if double else torch.float32)
     A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
     A_batch = A_sz[0]
 
@@ -141,7 +142,7 @@ def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor=None, tol
     A_norm_p = A_norm ** (1 / p)
     X = A_p / A_norm_p
     Xp2 = mat_pow(X, p_2)
-    Xp2_inv = matrix_inv_warm(Xp2, I, inner_tol, inner_iters, norm='inf', debug=debug)
+    Xp2_inv = matrix_inv_warm(Xp2, I, inner_tol, inner_iters, norm='inf', debug=debug, double=double)
     M = Xp2_inv.bmm(Z.bmm(Xp2_inv))
     IM_pp2_inv = I
     Ip_1 = I * (p - 1)
@@ -155,17 +156,17 @@ def matrix_even_root_N_warm(p: int, A: torch.Tensor, A_p: torch.Tensor=None, tol
             break
         if i_ < iters:
             IM_pp2 = mat_pow(IM_p, p_2)
-            IM_pp2_inv = matrix_inv_warm(IM_pp2, IM_pp2_inv, inner_tol, inner_iters, norm='inf', debug=debug)
+            IM_pp2_inv = matrix_inv_warm(IM_pp2, IM_pp2_inv, inner_tol, inner_iters, norm='inf', debug=debug, double=double)
             M_ = IM_pp2_inv.bmm(M.bmm(IM_pp2_inv))
 
             M = M_
     return (X * A_norm_p).type(orig_type)
 
-def matrix_sqrt_NS(A: torch.Tensor, iters: int=25, tol: float=1e-5, batched: bool=False, norm: str='inf', debug: bool=False, verbose: bool=False, **kwargs) -> torch.Tensor:
+def matrix_sqrt_NS(A: torch.Tensor, iters: int=25, tol: float=1e-5, batched: bool=False, norm: str='inf', debug: bool=False, verbose: bool=False, double: bool=False, **kwargs) -> torch.Tensor:
     # 3D batch of matrices only
     # Newton Schulz iterations; converge quadratically, but no warm start
     orig_type = A.dtype
-    A = A.type(torch.float32)
+    A = A.type(torch.float64 if double else torch.float32)
     A_sz, A_dim, A_norm, A_dev = _matrices_info(A, norm=norm)
     A_batch = A_sz[0]
 

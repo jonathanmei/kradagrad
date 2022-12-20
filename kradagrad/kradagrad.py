@@ -42,7 +42,11 @@ class KrADPreconditioner(Preconditioner):
         Args:
           grad: Gradient to compute statistics from.
         """
-        if not self.statistics: return
+        if not self.statistics: return  # sgd
+        if len(self.statistics) == 1:  # diagonal adagrad
+            super().add_statistics(grad)
+            return
+        # kradagrad
         partitioned_grads = self.partition_grad(grad)
         w1 = self._hps.beta2
         damping = self._hps.matrix_eps > 0
@@ -77,6 +81,11 @@ class KrADPreconditioner(Preconditioner):
     @torch.no_grad()
     def compute_preconditioners(self, **kwargs):
         """Compute L^{1/exp} for each statistics matrix L"""
+        if not self.statistics: return  # sgd
+        if len(self.statistics) == 1:  # diagonal adagrad
+            super().compute_preconditioners()
+            return
+        # kradagrad
         exp = self.exponent_for_preconditioner()
         for i, stat in enumerate(self.statistics):
             if stat.device.type == 'cpu':
@@ -91,7 +100,7 @@ class KrADPreconditioner(Preconditioner):
                     stat[None, ...], exp,
                     #self.preconditioners[i][None, ...],
                     None,
-                    iters=8, tol=1e-4, inner_iters=4, inner_tol=1e-3
+                    iters=8, tol=1e-4, inner_iters=4, inner_tol=1e-3,
                 )[0]  # mf.mat_root operates on batches
 
     @torch.no_grad()
@@ -133,8 +142,9 @@ class KradagradPP(Shampoo):
         prec = KrADPreconditioner(var, self.hps, eps_override=1.0)
         if not self.cpu:
             exp = prec.exponent_for_preconditioner()
-            self.stat_master_dict[exp].extend(prec.statistics)
-            self.cond_master_dict[exp].extend(prec.preconditioners)
+            if len(prec.statistics) > 1:
+                self.stat_master_dict[exp].extend(prec.statistics)
+                self.cond_master_dict[exp].extend(prec.preconditioners)
 
         # original, pared down        
         var = var.detach()
@@ -166,18 +176,27 @@ class KradagradPP(Shampoo):
                         self.init_var_state(p, state)
             self.initialized = True
         for group in self.param_groups:
+            # populate grads in series
             partitioned_grads_dict = defaultdict(list)
             for p in group['params']:
                 if p.grad is None: continue
                 prec = self.state[p][PRECONDITIONER]
                 exp = prec.exponent_for_preconditioner()
+                sh_ = prec._transformed_shape
+                if len(sh_) == 1:
+                    # diagonal adagrad stuff in series
+                    # easier, not much gain from batching
+                    prec.add_statistics(p.grad)
+                    prec.compute_preconditioners()
+                else:
+                    # list of lists of partitioned grads
+                    partitioned_grads_dict[exp].append(
+                        prec._partitioner.partition(
+                            p.grad.detach().reshape(sh_)
+                        )
+                    )
 
-                # list of lists of partitioned grads
-                partitioned_grads_dict[exp].append(prec._partitioner.partition(
-                    p.grad.detach().reshape(prec._transformed_shape)
-                ))
-
-            # batch processing
+            # process stats and precon in batches
             if self._step % self.hps.statistics_compute_steps == 0:
                 self.batch_add_statistics(partitioned_grads_dict)
             if self._step % self.hps.preconditioning_compute_steps == 0:
@@ -213,7 +232,6 @@ class KradagradPP(Shampoo):
                 # Final update
                 p.data.add_(momentum_update, alpha=-lr)
 
-    # TODO batch processing
     def batch_add_statistics(self, partitioned_grads_dict):
         bs = self.tensor_batch_size
         w1 = self.hps.beta2
@@ -261,7 +279,6 @@ class KradagradPP(Shampoo):
                     for j in range(bs_):
                         batch_stats_by_rank[k][[j] + _slicer(stats_this[j * rank + k])] = stats_this[j * rank + k]
 
-                
                 # process in batch
                 for k in range(rank):
                     # just this dimension

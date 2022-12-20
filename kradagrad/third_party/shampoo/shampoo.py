@@ -84,6 +84,11 @@ class ShampooHyperParams:
   # Nesterov momentum
   nesterov: bool = True
 
+  # Use adagrad on vectors
+  use_adagrad: bool = False
+  # if `use_adagrad` is True, diagonal? If not, full matrix version
+  #use_diag: bool = True
+
 
 class Graft:
   """Base class to perform grafting onto Shampoo. This class does no grafting.
@@ -283,10 +288,15 @@ class Preconditioner:
     rank = len(self._transformed_shape)
     device = var.device
     if rank <= 1:
-      self.statistics = []
-      self.preconditioners = []
+      if self._hps.use_adagrad:
+        eps = hps.matrix_eps
+        self.statistics = [eps * torch.ones(self._transformed_shape[0], device=device).type(torch.float32)]
+        self.preconditioners = [torch.ones(self._transformed_shape[0], device=device).type(torch.float32)]
+      else:
+        self.statistics = []
+        self.preconditioners = []
     else:
-      eps = self._hps.matrix_eps if eps_override is None else eps_override
+      eps = hps.matrix_eps if eps_override is None else eps_override
       self.statistics = [eps * torch.eye(s[0], device=device).type(torch.float32) for s in shapes]
       self.preconditioners = [torch.eye(s[0], device=device).type(torch.float32) for s in shapes]
 
@@ -297,12 +307,17 @@ class Preconditioner:
     Args:
       grad: Gradient to compute statistics from.
     """
-    if not self.statistics: return
-    reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
-    partitioned_grads = self._partitioner.partition(reshaped_grad)
+    if not self.statistics: return  # sgd
+    rank = len(self._transformed_shape)
     w1 = self._hps.beta2
     w2 = 1.0 if w1 == 1.0 else (1.0 - w1)
-    rank = len(self._transformed_shape)
+    if rank == 1:  # diagonal adagrad
+      stat = grad * grad
+      self.statistics[0].mul_(w1).add_(stat, alpha=w2)
+      return
+    # shampoo
+    reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
+    partitioned_grads = self._partitioner.partition(reshaped_grad)
     for j, grad in enumerate(partitioned_grads):
       for i in range(rank):
         axes = list(range(i)) + list(range(i + 1, rank))
@@ -319,8 +334,13 @@ class Preconditioner:
   @torch.no_grad()
   def compute_preconditioners(self, **kwargs):
     """Compute L^{-1/exp} for each stats matrix L."""
+    if not self.statistics: return  # sgd
     exp = self.exponent_for_preconditioner()
     eps = self._hps.matrix_eps
+    if len(self.statistics) == 1:  # diagonal adagrad
+      self.preconditioners[0] = torch.pow(self.statistics[0] + eps, -1/exp)
+      return
+    # shampoo
     for i, stat in enumerate(self.statistics):
       if self.preconditioners[i].device.type == 'cpu':
         self.preconditioners[i] = mf.matrix_power_svd(stat + eps * torch.eye(stat.size()[0]), -1/exp)
@@ -338,7 +358,10 @@ class Preconditioner:
     Returns:
       A preconditioned gradient.
     """
-    if not self.preconditioners: return grad
+    if not self.preconditioners: return grad  # sgd
+    if len(self.preconditioners) == 1:  # diagonal adagrad
+        return grad * self.preconditioners[0]
+    # precondition gradient
     reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
     partitioned_grads = self._partitioner.partition(reshaped_grad)
     preconditioned_partitioned_grads = []

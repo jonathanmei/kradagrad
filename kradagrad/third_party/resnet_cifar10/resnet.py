@@ -1,5 +1,5 @@
 # --- Note from Kradagrad authors ---
-# Besides this note, this file an unmodified version of ResNet for CIFAR-10/100.
+# Besides this note, this file a lightly modified version of ResNet for CIFAR-10/100 to allow softplus.
 #     URL: https://github.com/akamaster/pytorch_resnet_cifar10
 #     commit: d5489e8
 #     accessed: 2022_11_23
@@ -60,8 +60,9 @@ class LambdaLayer(nn.Module):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, in_planes, planes, stride=1, option='A'):
+    def __init__(self, in_planes, planes, stride=1, option='A', activation='relu'):
         super(BasicBlock, self).__init__()
+        self.activation = activation
         self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
@@ -82,38 +83,41 @@ class BasicBlock(nn.Module):
                 )
 
     def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn1(self.conv1(x))
+        out = F.relu(out) if self.activation == 'relu' else F.softplus(out)
         out = self.bn2(self.conv2(out))
         out += self.shortcut(x)
-        out = F.relu(out)
+        out = F.relu(out) if self.activation == 'relu' else F.softplus(out)
         return out
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10):
+    def __init__(self, block, num_blocks, num_classes=10, activation='relu'):
         super(ResNet, self).__init__()
+        self.activation = activation
         self.in_planes = 16
 
         self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(16)
-        self.layer1 = self._make_layer(block, 16, num_blocks[0], stride=1)
-        self.layer2 = self._make_layer(block, 32, num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(block, 64, num_blocks[2], stride=2)
+        self.layer1 = self._make_layer(block, 16, num_blocks[0], stride=1, activation=activation)
+        self.layer2 = self._make_layer(block, 32, num_blocks[1], stride=2, activation=activation)
+        self.layer3 = self._make_layer(block, 64, num_blocks[2], stride=2, activation=activation)
         self.linear = nn.Linear(64, num_classes)
 
         self.apply(_weights_init)
 
-    def _make_layer(self, block, planes, num_blocks, stride):
+    def _make_layer(self, block, planes, num_blocks, stride, activation='relu'):
         strides = [stride] + [1]*(num_blocks-1)
         layers = []
         for stride in strides:
-            layers.append(block(self.in_planes, planes, stride))
+            layers.append(block(self.in_planes, planes, stride, activation=activation))
             self.in_planes = planes * block.expansion
 
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn1(self.conv1(x))
+        out = F.relu(out) if self.activation == 'relu' else F.softplus(out)
         out = self.layer1(out)
         out = self.layer2(out)
         out = self.layer3(out)
@@ -123,28 +127,28 @@ class ResNet(nn.Module):
         return out
 
 
-def resnet20():
-    return ResNet(BasicBlock, [3, 3, 3])
+def resnet20(activation='relu'):
+    return ResNet(BasicBlock, [3, 3, 3], activation=activation)
 
 
-def resnet32():
-    return ResNet(BasicBlock, [5, 5, 5])
+def resnet32(activation='relu'):
+    return ResNet(BasicBlock, [5, 5, 5], activation=activation)
 
 
-def resnet44():
-    return ResNet(BasicBlock, [7, 7, 7])
+def resnet44(activation='relu'):
+    return ResNet(BasicBlock, [7, 7, 7], activation=activation)
 
 
-def resnet56():
-    return ResNet(BasicBlock, [9, 9, 9])
+def resnet56(activation='relu'):
+    return ResNet(BasicBlock, [9, 9, 9], activation=activation)
 
 
-def resnet110():
-    return ResNet(BasicBlock, [18, 18, 18])
+def resnet110(activation='relu'):
+    return ResNet(BasicBlock, [18, 18, 18], activation=activation)
 
 
-def resnet1202():
-    return ResNet(BasicBlock, [200, 200, 200])
+def resnet1202(activation='relu'):
+    return ResNet(BasicBlock, [200, 200, 200], activation=activation)
 
 
 def test(net):
