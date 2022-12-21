@@ -14,7 +14,7 @@ def gen_sweep(dict_sweep):
     # dict of lists
     for prod_ in product(*list(dict_sweep.values())):
         yield gen_arg(dict(zip(dict_sweep.keys(), prod_)))
-        
+
 def run_sweep(args_sweep, n_proc, n_gpu, timeout):
     # poll every `timeout` seconds
     running_procs = []

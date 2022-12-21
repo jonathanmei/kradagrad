@@ -93,9 +93,6 @@ class KrADmmPreconditioner(Preconditioner):
     def compute_preconditioners(self, **kwargs):
         """Compute L^{1/exp} for each statistics matrix L"""
         if not self.statistics: return  # sgd
-        if len(self.statistics) == 1:  # diagonal adagrad
-            super().compute_preconditioners()
-            return
         # kradagradmm
         exp = self.exponent_for_preconditioner()
         for i in list(self.updated):
@@ -169,34 +166,28 @@ class KradagradMM(Shampoo):
                 prec = state[PRECONDITIONER]
 
                 # Compute stats and preconditioners
-                if len(prec.statistics) == 1:  # diagonal adagrad stuff
-                    prec.add_statistics(grad)  # can be every step
-                else:
-                    if self._step % hps.statistics_compute_steps == 0:
-                        sh_ = prec._transformed_shape
-                        nd_ = len(sh_)
-                        if self._step < nd_ ** 2:
-                            # simple equal updating schedule:
-                            ix = self._step % nd_
-                        else:
-                            # O(k^0.5) for everything except largest dim
-                            max_dim = max(sh_)
-                            max_ix = [j for (j, x) in enumerate(sh_) if x == max_dim][0]
-                            step_sqrt_floor = int(math.sqrt(self._step))
-                            exc = self._step - step_sqrt_floor ** 2
-                            ix = exc if exc < nd_ else max_ix
+                if self._step % hps.statistics_compute_steps == 0:
+                    sh_ = prec._transformed_shape
+                    nd_ = len(sh_)
+                    if self._step < nd_ ** 2:
+                        # simple equal updating schedule:
+                        ix = self._step % nd_
+                    else:
+                        # O(k^0.5) for everything except largest dim
+                        max_dim = max(sh_)
+                        max_ix = [j for (j, x) in enumerate(sh_) if x == max_dim][0]
+                        step_sqrt_floor = int(math.sqrt(self._step))
+                        exc = self._step - step_sqrt_floor ** 2
+                        ix = exc if exc < nd_ else max_ix
 
-                        prec.add_statistic(grad, ix)
+                    prec.add_statistic(grad, ix)
                 if self._step % hps.preconditioning_compute_steps == 0:
                     prec.compute_preconditioners()
 
                 # Precondition
                 krad_grad = grad
-                if len(prec.statistics) == 1:  # diagonal adagrad stuff
+                if self._step >= self.hps.start_preconditioning_step:
                     krad_grad = prec.preconditioned_grad(grad)
-                else:
-                    if self._step >= self.hps.start_preconditioning_step:
-                        krad_grad = prec.preconditioned_grad(grad)
 
                 # Weight decay
                 if self.hps.weight_decay != 0.0:

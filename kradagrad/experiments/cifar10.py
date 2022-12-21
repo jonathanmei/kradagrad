@@ -49,7 +49,6 @@ def make_optimizer(params, args):
             best_effort_shape_interpretation=True,
             inverse_exponent_override=args.inverse_exponent_override,
             preconditioning_compute_steps=mu.roundup(50_000, args.batch_size),
-            use_adagrad=args.use_adagrad,
         )
         if args.optimizer == 'shampoo':
             optimizer = kradagrad.Shampoo(params, lr=args.lr, hyperparams=hps, momentum=args.momentum)
@@ -57,7 +56,7 @@ def make_optimizer(params, args):
             optimizer = kradagrad.KradagradMM(params, lr=args.lr, hyperparams=hps, momentum=args.momentum, debug=args.debug)
         elif args.optimizer == 'krad':
             optimizer = kradagrad.KradagradPP(params, lr=args.lr, momentum=args.momentum, hyperparams=hps,
-                                             tensor_batch_size=16)
+                                             tensor_batch_size=0)  # tensor batching only for single run
     else:
         raise ValueError('unknown optimizer: {}'.format(args.optimizer))
     return optimizer
@@ -219,8 +218,6 @@ def main(args):
     ) + (
         '_ONS' if args.inverse_exponent_override else ''
     ) + (
-        '_adadiag' if args.use_adagrad else ''
-    ) + (
         '_tf32' if args.tf32 else ''
     ) + (
         '_soft' if args.activation=='softplus' else '_relu'
@@ -248,7 +245,6 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--block_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--use_adagrad', action='store_true')
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--weight_decay', type=float, default=0)
     parser.add_argument('--inverse_exponent_override', type=int, default=0)

@@ -84,11 +84,6 @@ class ShampooHyperParams:
   # Nesterov momentum
   nesterov: bool = True
 
-  # Use adagrad on vectors
-  use_adagrad: bool = False
-  # if `use_adagrad` is True, diagonal? If not, full matrix version
-  #use_diag: bool = True
-
 
 class Graft:
   """Base class to perform grafting onto Shampoo. This class does no grafting.
@@ -288,13 +283,8 @@ class Preconditioner:
     rank = len(self._transformed_shape)
     device = var.device
     if rank <= 1:
-      if self._hps.use_adagrad:
-        eps = hps.matrix_eps
-        self.statistics = [eps * torch.ones(self._transformed_shape[0], device=device).type(torch.float32)]
-        self.preconditioners = [torch.ones(self._transformed_shape[0], device=device).type(torch.float32)]
-      else:
-        self.statistics = []
-        self.preconditioners = []
+      self.statistics = []
+      self.preconditioners = []
     else:
       eps = hps.matrix_eps if eps_override is None else eps_override
       self.statistics = [eps * torch.eye(s[0], device=device).type(torch.float32) for s in shapes]
@@ -311,10 +301,6 @@ class Preconditioner:
     rank = len(self._transformed_shape)
     w1 = self._hps.beta2
     w2 = 1.0 if w1 == 1.0 else (1.0 - w1)
-    if rank == 1:  # diagonal adagrad
-      stat = grad * grad
-      self.statistics[0].mul_(w1).add_(stat, alpha=w2)
-      return
     # shampoo
     reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
     partitioned_grads = self._partitioner.partition(reshaped_grad)
@@ -337,9 +323,6 @@ class Preconditioner:
     if not self.statistics: return  # sgd
     exp = self.exponent_for_preconditioner()
     eps = self._hps.matrix_eps
-    if len(self.statistics) == 1:  # diagonal adagrad
-      self.preconditioners[0] = torch.pow(self.statistics[0] + eps, -1/exp)
-      return
     # shampoo
     for i, stat in enumerate(self.statistics):
       if self.preconditioners[i].device.type == 'cpu':
@@ -359,8 +342,6 @@ class Preconditioner:
       A preconditioned gradient.
     """
     if not self.preconditioners: return grad  # sgd
-    if len(self.preconditioners) == 1:  # diagonal adagrad
-        return grad * self.preconditioners[0]
     # precondition gradient
     reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
     partitioned_grads = self._partitioner.partition(reshaped_grad)
