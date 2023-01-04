@@ -72,7 +72,7 @@ def train_run(args):
     writer = SummaryWriter(os.path.join(args.save_dir, 'tensorboard_{}{}'.format(args.optimizer, args.opt_modifier_str)))
     
 
-    model = torch.nn.DataParallel(resnet.__dict__[args.arch](activation=args.activation))
+    model = torch.nn.DataParallel(resnet.__dict__[args.arch](activation=args.activation, num_classes=10 if args.data=='CIFAR10' else 100))
     model.cuda()
     
     # define loss function (criterion)

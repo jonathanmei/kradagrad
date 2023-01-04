@@ -127,28 +127,28 @@ class ResNet(nn.Module):
         return out
 
 
-def resnet20(activation='relu'):
-    return ResNet(BasicBlock, [3, 3, 3], activation=activation)
+def resnet20(num_classes=10, activation='relu'):
+    return ResNet(BasicBlock, [3, 3, 3], num_classes=num_classes, activation=activation)
 
 
-def resnet32(activation='relu'):
-    return ResNet(BasicBlock, [5, 5, 5], activation=activation)
+def resnet32(num_classes=10, activation='relu'):
+    return ResNet(BasicBlock, [5, 5, 5], num_classes=num_classes, activation=activation)
 
 
-def resnet44(activation='relu'):
-    return ResNet(BasicBlock, [7, 7, 7], activation=activation)
+def resnet44(num_classes=10, activation='relu'):
+    return ResNet(BasicBlock, [7, 7, 7], num_classes=num_classes, activation=activation)
 
 
-def resnet56(activation='relu'):
-    return ResNet(BasicBlock, [9, 9, 9], activation=activation)
+def resnet56(num_classes=10, activation='relu'):
+    return ResNet(BasicBlock, [9, 9, 9], num_classes=num_classes, activation=activation)
 
 
-def resnet110(activation='relu'):
-    return ResNet(BasicBlock, [18, 18, 18], activation=activation)
+def resnet110(num_classes=10, activation='relu'):
+    return ResNet(BasicBlock, [18, 18, 18], num_classes=num_classes, activation=activation)
 
 
-def resnet1202(activation='relu'):
-    return ResNet(BasicBlock, [200, 200, 200], activation=activation)
+def resnet1202(num_classes=10, activation='relu'):
+    return ResNet(BasicBlock, [200, 200, 200], num_classes=num_classes, activation=activation)
 
 
 def test(net):
