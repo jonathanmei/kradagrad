@@ -35,7 +35,7 @@ def run_sweep(args_sweep, n_proc, n_gpu, timeout, hundred=False):
                  'python', 'cifar10.py'] + 
                 (['--arch', 'resnet56',
                  '--data', 'CIFAR100',
-                  '--not_half',
+                  '--no_batch_norm'
                 ] if hundred else []) + 
                 ['--optimizer', args.optimizer,
                  '--epochs', args.epochs,
@@ -75,6 +75,6 @@ if __name__ == '__main__':
     n_proc = 24
     n_gpu = 2
     timeout = 10
-    args_sweeps = chain(args_sweep_precon, args_sweep_gd, args_sweep_ada)
+    args_sweeps = chain(args_sweep_gd, args_sweep_ada, args_sweep_precon)
     #run_sweep(args_sweeps, n_proc, n_gpu, timeout)
     run_sweep(args_sweeps, n_proc, n_gpu, timeout, hundred=True)

@@ -336,7 +336,8 @@ class Preconditioner:
 
     Args:
       grad: A gradient tensor to precondition.
-      statistics_unmerged: if `True`, precondition with `statistics` and return unmerged
+      statistics: if `True, precondition with `statistics` instead
+      unmerged: if `True`, return unmerged
 
     Returns:
       A preconditioned gradient.
@@ -386,6 +387,10 @@ class Shampoo(optim.Optimizer):
               **kwargs):
     defaults = dict(lr=lr, momentum=momentum)
     self.hps = hyperparams
+    # allow overriding hyperparameters via kwargs:
+    for k_, v_ in kwargs:
+        if k_ in self.hps.__dict__:
+            self.hps.__setattr__(k_, v_)
     super().__init__(params, defaults)
 
   @torch.no_grad()

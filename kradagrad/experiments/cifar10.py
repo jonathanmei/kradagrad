@@ -72,7 +72,7 @@ def train_run(args):
     writer = SummaryWriter(os.path.join(args.save_dir, 'tensorboard_{}{}'.format(args.optimizer, args.opt_modifier_str)))
     
 
-    model = torch.nn.DataParallel(resnet.__dict__[args.arch](activation=args.activation, num_classes=10 if args.data=='CIFAR10' else 100))
+    model = torch.nn.DataParallel(resnet.__dict__[args.arch](activation=args.activation, num_classes=10 if args.data=='CIFAR10' else 100, batch_norm=not args.no_batch_norm))
     model.cuda()
     
     # define loss function (criterion)
@@ -241,6 +241,7 @@ if __name__ == '__main__':
                         choices=['CIFAR10', 'CIFAR100'])
     parser.add_argument('--optimizer', type=str, default='sgd',
                         choices=['sgd', 'ada', 'shampoo', 'kradmm', 'krad'])
+    parser.add_argument('--no_batch_norm', action='store_true')
 
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--block_size', type=int, default=128)
