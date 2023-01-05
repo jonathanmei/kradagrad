@@ -388,7 +388,7 @@ class Shampoo(optim.Optimizer):
     defaults = dict(lr=lr, momentum=momentum)
     self.hps = hyperparams
     # allow overriding hyperparameters via kwargs:
-    for k_, v_ in kwargs:
+    for k_, v_ in kwargs.items():
         if k_ in self.hps.__dict__:
             self.hps.__setattr__(k_, v_)
     super().__init__(params, defaults)
