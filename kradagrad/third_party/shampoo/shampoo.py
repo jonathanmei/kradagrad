@@ -331,12 +331,12 @@ class Preconditioner:
         self.preconditioners[i] = matrix_functions.ComputePower(stat, exp, ridge_epsilon=eps)
 
   @torch.no_grad()
-  def preconditioned_grad(self, grad, statistics=False, unmerged=False):
+  def preconditioned_grad(self, grad, skip=[], unmerged=False):
     """Precondition the gradient.
 
     Args:
       grad: A gradient tensor to precondition.
-      statistics: if `True, precondition with `statistics` instead
+      skip: list of `int` in [0, grad.ndim] for the dimensions to not precondition
       unmerged: if `True`, return unmerged
 
     Returns:
@@ -349,19 +349,21 @@ class Preconditioner:
     preconditioned_partitioned_grads = []
     num_splits = self._partitioner.num_splits()
     for i, grad in enumerate(partitioned_grads):
-      mats = self.statistics if statistics else self.preconditioners
+      mats = self.preconditioners
       preconditioners_for_grad = mats[i * num_splits:(i + 1) * num_splits]
       rank = len(grad.shape)
       orig_type = grad.type()
       precond_grad = grad.type(torch.float32)
       for j in range(rank):
         preconditioner = preconditioners_for_grad[j]
-        precond_grad_ = torch.tensordot(
-            precond_grad, preconditioner, [[0], [0]])
+        if j in skip:
+          pg_ = precond_grad.moveaxis(0, -1)
+        else:
+          pg_ = torch.tensordot(precond_grad, preconditioner, [[0], [0]])
         if 'debug' in self.__dict__ and self.debug and not precond_grad.isfinite().all():
-            print(i, j, 'precon', preconditioner, '\nprecond_grad (before)', precond_grad, '\nprecond_grad (after)', precond_grad_)
-            raise ValueError('precond_grad broke')
-        precond_grad = precond_grad_
+          print(i, j, 'precon', preconditioner, '\nprecond_grad (before)', precond_grad, '\nprecond_grad (after)', pg_)
+          raise ValueError('precond_grad broke')
+        precond_grad = pg_
       preconditioned_partitioned_grads.append(precond_grad.type(orig_type))
     if not unmerged:
       merged_grad = self._partitioner.merge_partitions(

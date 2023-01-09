@@ -38,16 +38,18 @@ class KrADmmPreconditioner(Preconditioner):
 
     @torch.no_grad()
     def add_statistic(self, grad, i):
-        """Compute inverse KrAD statistic from gradients and add to the correct state entries.
+        """Compute inverse KrAD statistic from gradients, add to the correct state entries, and
+            cache preconditioned gradient (skipping dimension i).
 
         Args:
           grad: Gradient to compute statistics from.
           i: rank for which to add statistic to
         """
         if not self.statistics: return
+        grad_orig = grad
         grad = grad.type(torch.float32)
         partitioned_grads = self.partition_grad(grad)
-        partitioned_precon_grads = self.preconditioned_grad(grad, statistics=True, unmerged=True)
+        partitioned_precon_grads = self.preconditioned_grad(grad, skip=[i], unmerged=True)
         w1 = self._hps.beta2
         damping = self._hps.matrix_eps > 0
         rank = len(self._transformed_shape)
@@ -59,10 +61,10 @@ class KrADmmPreconditioner(Preconditioner):
             if w1 < 1:
                 stat.mul_(1/w1)
 
-            lgrgt = torch.tensordot(precon_grad_, grad_, [axes, axes])
-            if self.debug and not lgrgt.isfinite().all():
-                print('self.updated', self.updated, '\nlgrgt', lgrgt, '\nprecon_grad', precon_grad_, '\nstat', stat_)
-                raise ValueError('lgrgt broke')
+            grgt = torch.tensordot(precon_grad_, precon_grad_, [axes, axes])
+            if self.debug and not grgt.isfinite().all():
+                print('self.updated', self.updated, '\ngrgt', grgt, '\nprecon_grad', precon_grad_, '\nstat', stat_)
+                raise ValueError('grgt broke')
 
             if damping:
                 eps = self._hps.matrix_eps
@@ -70,15 +72,11 @@ class KrADmmPreconditioner(Preconditioner):
                 stat2eps = stat.mm(stat.T.mul(-eps))
                 stat_prime = stat + stat2eps
 
-                lgrgt_2eps = stat.mm(lgrgt.mul(-eps))
-                lgrgt_prime = lgrgt + lgrgt_2eps
-                
-                if self.debug and (not lgrgt_prime.isfinite().all() or not stat_prime.isfinite().all()):
-                    print('self.updated', self.updated, '\nlgrgt_prime', lgrgt_prime, '\nstat_prime', stat_prime, '\nstat', stat, '\nprecon', precon, '\ngrad', grad_, '\nprecon_grad', precon_grad_)
+                if self.debug and not stat_prime.isfinite().all():
+                    print('self.updated', self.updated, '\nstat_prime', stat_prime, '\nstat', stat, '\nprecon', precon, '\ngrad', grad_, '\nprecon_grad', precon_grad_)
                     raise ValueError('damping broke')
-                lgrgt = lgrgt_prime
-                #stat = mf.symmetrize(stat_prime)
                 stat = stat_prime
+            lgrgt = stat.mm(grgt)
 
             # damping
             t_k = - (1 + mf.matrices_norm(lgrgt, 'fro'))
@@ -88,6 +86,11 @@ class KrADmmPreconditioner(Preconditioner):
                 print('DX', DX, '\nlgrgt', lgrgt)
                 raise ValueError('DX broke')
             self.statistics[j*rank + i] = stat + DX
+        grad_orig.copy_(
+            self._partitioner.merge_partitions(
+                partitioned_precon_grads
+            ).reshape(self._original_shape).type_as(grad_orig)
+        )
 
     @torch.no_grad()
     def compute_preconditioners(self, **kwargs):
@@ -102,10 +105,10 @@ class KrADmmPreconditioner(Preconditioner):
                     self.preconditioners[i] = mf.matrix_power_svd(stat, 1 / exp) if exp > 1 else stat
                 else:
                     self.preconditioners[i] = mf.mat_root(
-                        stat[None, ...], exp,
-                        self.preconditioners[i][None, ...],
+                        stat, exp,
+                        self.preconditioners[i],
                         iters=12, tol=1e-4,# debug=True
-                    )[0]  # mf.mat_root operates on batches
+                    )
             except Exception as err:
                 if self.debug:
                     print('stat', stat, '\nmat_root broke')
@@ -121,6 +124,39 @@ class KrADmmPreconditioner(Preconditioner):
         reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
         partitioned_grads = self._partitioner.partition(reshaped_grad)
         return partitioned_grads
+
+    @torch.no_grad()
+    def precondition_grad_single(self, grad, ix):
+        """Precondition the gradient.
+
+        Args:
+          grad: A mostly preconditioned tensor
+          ix: the dimension to precondition
+
+        Returns:
+          A fully preconditioned gradient.
+        """
+        if not self.preconditioners: return grad  # sgd
+        # precondition gradient
+        reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
+        partitioned_grads = self._partitioner.partition(reshaped_grad)
+        preconditioned_partitioned_grads = []
+        num_splits = self._partitioner.num_splits()
+        for i, grad in enumerate(partitioned_grads):
+            mats = self.preconditioners
+            preconditioners_for_grad = mats[i * num_splits:(i + 1) * num_splits]
+            rank = len(grad.shape)
+            orig_type = grad.type()
+            precond_grad = grad.type(torch.float32)
+
+            preconditioner = preconditioners_for_grad[ix]
+            precond_grad = torch.tensordot(precond_grad, preconditioner, [[ix], [0]])
+            precond_grad = precond_grad.moveaxis(-1, ix)
+
+            preconditioned_partitioned_grads.append(precond_grad.type(orig_type))
+        merged_grad = self._partitioner.merge_partitions(
+            preconditioned_partitioned_grads)
+        return torch.reshape(merged_grad, self._original_shape)
 
 class KradagradMM(Shampoo):
     r"""Implements a simple version of Kradagrad-- Optimizer Algorithm.
@@ -180,6 +216,7 @@ class KradagradMM(Shampoo):
                         exc = self._step - step_sqrt_floor ** 2
                         ix = exc if exc < nd_ else max_ix
 
+                    # also modifies grad in place to be preconditioned in all dims except ix:
                     prec.add_statistic(grad, ix)
                 if self._step % hps.preconditioning_compute_steps == 0:
                     prec.compute_preconditioners()
@@ -187,7 +224,10 @@ class KradagradMM(Shampoo):
                 # Precondition
                 krad_grad = grad
                 if self._step >= self.hps.start_preconditioning_step:
-                    krad_grad = prec.preconditioned_grad(grad)
+                    if self._step % hps.statistics_compute_steps == 0:
+                        krad_grad = prec.precondition_grad_single(grad, ix)
+                    else:
+                        krad_grad = prec.preconditioned_grad(grad)
 
                 # Weight decay
                 if self.hps.weight_decay != 0.0:
