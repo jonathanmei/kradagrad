@@ -3,12 +3,18 @@ import sys
 
 import avalanche as avl
 import kradagrad.math_utils as mu
+import ray
 import torch
 from avalanche.benchmarks.utils import AvalancheSubset
 from avalanche.benchmarks.utils.data_loader import TaskBalancedDataLoader
 from avalanche.evaluation import metrics as metrics
 from experiments.utils import create_default_args, set_seed
+from kiwisolver import Expression
 from models import MLP
+from ray import tune
+from ray.air import session
+from ray.air.checkpoint import Checkpoint
+from ray.tune.schedulers import ASHAScheduler
 from torch.nn import CrossEntropyLoss
 from torch.optim import SGD, Adam
 
@@ -83,7 +89,7 @@ def get_optimizer(
     return optimizer
 
 
-def train_gem_pmnist(config, override_args=None):
+def train_gem_pmnist(config):
     """
     "Gradient Episodic Memory for Continual Learning" by Lopez-paz et. al. (2017).
     https://proceedings.neurips.cc/paper/2017/hash/f87522788a2be2d171666752f97ddebb-Abstract.html
@@ -97,14 +103,14 @@ def train_gem_pmnist(config, override_args=None):
             "epochs": 1,
             "dropout": 0,
             "mem_strength": 0.5,
-            "learning_rate": 0.1,
             "train_mb_size": 10,
             "seed": None,
-        },
-        override_args,
+        }
     )
 
-    set_seed(args.seed)
+    run_name = f"{config['optimizer']}_lr_{config['lr']}_seed_{config['seed']}"
+
+    set_seed(config["seed"])
     device = torch.device(
         f"cuda:{args.cuda}" if torch.cuda.is_available() and args.cuda >= 0 else "cpu"
     )
@@ -118,16 +124,29 @@ def train_gem_pmnist(config, override_args=None):
     criterion = CrossEntropyLoss()
 
     interactive_logger = avl.logging.InteractiveLogger()
-    tb_logger = avl.logging.TensorboardLogger(
-        tb_log_dir="continual_learning_tflogs/shampoo_20"
-    )
+    tb_logger = avl.logging.TensorboardLogger(tb_log_dir=f"tb")
 
     evaluation_plugin = avl.training.plugins.EvaluationPlugin(
         metrics.accuracy_metrics(epoch=True, experience=True, stream=True),
         loggers=[interactive_logger, tb_logger],
     )
 
-    optimizer = get_optimizer(model.parameters(), optimizer="shampoo")
+    optimizer = get_optimizer(
+        model.parameters(),
+        optimizer=config["optimizer"],
+        lr=config["lr"],
+        eps=config["eps"],
+    )
+
+    loaded_checkpoint = session.get_checkpoint()
+    if loaded_checkpoint:
+        with loaded_checkpoint.as_directory() as loaded_checkpoint_dir:
+            model_state, optimizer_state = torch.load(
+                os.path.join(loaded_checkpoint_dir, "checkpoint.pt")
+            )
+        model.load_state_dict(model_state)
+        optimizer.load_state_dict(optimizer_state)
+
     cl_strategy = GEM_reduced(
         model,
         optimizer,
@@ -142,13 +161,48 @@ def train_gem_pmnist(config, override_args=None):
     )
 
     res = None
+
     for experience in benchmark.train_stream:
         cl_strategy.train(experience)
         res = cl_strategy.eval(benchmark.test_stream)
+
+    os.makedirs("my_model", exist_ok=True)
+    torch.save((model.state_dict(), optimizer.state_dict()), "my_model/checkpoint.pt")
+    checkpoint = Checkpoint.from_directory("my_model")
+
+    session.report(res, checkpoint=checkpoint)
 
     return res
 
 
 if __name__ == "__main__":
-    res = train_gem_pmnist(override_args={"optimizer": "shampoo"})
-    print(res)
+
+    config_2ord = {
+        "lr": tune.grid_search([1, 2.5e-1, 1e-1, 2.5e-2, 1e-2]),
+        "optimizer": tune.grid_search(["shampoo", "krad", "kradmm"]),
+        "seed": tune.grid_search([100, 200, 300]),
+        "eps": tune.grid_search([1e-4]),
+    }
+    config_1ord = {
+        "lr": tune.grid_search([1e-1, 5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3]),
+        "optimizer": tune.grid_search(["sgd", "adam"]),
+        "seed": tune.grid_search([100, 200, 300]),
+        "eps": tune.grid_search([1e-6]),
+    }
+
+    tune_config = tune.TuneConfig(
+        metric="Top1_Acc_Stream/eval_phase/test_stream/Task000",
+        mode="max",
+        num_samples=1,
+    )
+    # tuner = tune.Tuner(
+    #     train_gem_pmnist, param_space=config_1ord, tune_config=tune_config
+    # )
+
+    # results_1ord = tuner.fit()
+
+    tuner = tune.Tuner(
+        train_gem_pmnist, param_space=config_2ord, tune_config=tune_config
+    )
+    # tuner = tuner.restore("~/ray_results/train_gem_pmnist_2023-01-10_03-58-50")
+    results_2ord = tuner.fit()

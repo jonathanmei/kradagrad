@@ -100,6 +100,9 @@ def gem_pmnist(override_args=None):
             "learning_rate": 0.1,
             "train_mb_size": 10,
             "seed": None,
+            "optimizer": "sgd",
+            "lr": 0.01,
+            "eps": 1e-6,
         },
         override_args,
     )
@@ -127,7 +130,9 @@ def gem_pmnist(override_args=None):
         loggers=[interactive_logger, tb_logger],
     )
 
-    optimizer = get_optimizer(model.parameters(), optimizer="shampoo")
+    optimizer = get_optimizer(
+        model.parameters(), optimizer=args.optimizer, eps=args.eps, lr=args.lr
+    )
     cl_strategy = GEM_reduced(
         model,
         optimizer,
@@ -150,5 +155,7 @@ def gem_pmnist(override_args=None):
 
 
 if __name__ == "__main__":
-    res = gem_pmnist(override_args={"optimizer": "shampoo"})
+    res = gem_pmnist(
+        override_args={"optimizer": "kradmm", "lr": 0.01, "seed": 100, "eps": 1e-4}
+    )
     print(res)
