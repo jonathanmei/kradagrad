@@ -14,6 +14,7 @@ import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
 from torch.utils.tensorboard import SummaryWriter
+import torchvision
 import torchvision.transforms as xforms
 import torchvision.datasets as datasets
 from tqdm import tqdm
@@ -28,6 +29,11 @@ from kradagrad.third_party.resnet_cifar10.trainer import (
 mf = kradagrad.positive_matrix_functions
 import kradagrad.math_utils as mu
 from kradagrad.third_party.resnet_cifar10 import resnet
+
+CIFAR100_TRAIN_MEAN = (0.5070751592371323, 0.48654887331495095, 0.4409178433670343)
+CIFAR100_TRAIN_STD = (0.2673342858792401, 0.2564384629170883, 0.27615047132568404)
+CIFAR10_TRAIN_MEAN = (0.485, 0.456, 0.406)
+CIFAR10_TRAIN_STD = (0.229, 0.224, 0.225)
 
 def make_optimizer(params, args):
     if args.optimizer == 'sgd':
@@ -48,7 +54,8 @@ def make_optimizer(params, args):
             block_size=args.block_size,
             best_effort_shape_interpretation=True,
             inverse_exponent_override=args.inverse_exponent_override,
-            preconditioning_compute_steps=mu.roundup(50_000, args.batch_size),
+            #preconditioning_compute_steps=mu.roundup(50_000, args.batch_size),
+            preconditioning_compute_steps=args.update_freq,
         )
         if args.optimizer == 'shampoo':
             optimizer = kradagrad.Shampoo(params, lr=args.lr, hyperparams=hps, momentum=args.momentum)
@@ -72,7 +79,14 @@ def train_run(args):
     writer = SummaryWriter(os.path.join(args.save_dir, 'tensorboard_{}{}'.format(args.optimizer, args.opt_modifier_str)))
     
 
-    model = torch.nn.DataParallel(resnet.__dict__[args.arch](activation=args.activation, num_classes=10 if args.data=='CIFAR10' else 100, batch_norm=not args.no_batch_norm))
+    num_classes = 10 if args.data=='CIFAR10' else 100
+    model = torch.nn.DataParallel(resnet.__dict__[args.arch](activation=args.activation, num_classes=num_classes, batch_norm=not args.no_batch_norm))
+    #if args.arch == 'resnet50':
+    #    model = torchvision.models.ResNet(torchvision.models.resnet.Bottleneck, [3,4,6,3], num_classes=num_classes)
+    #else:
+    #    model = torchvision.models.ResNet(torchvision.models.resnet.BasicBlock, [3,4,6,3], num_classes=num_classes)
+    #model = resnet.__dict__[args.arch](activation=args.activation, num_classes=10 if args.data=='CIFAR10' else 100, batch_norm=not args.no_batch_norm)
+    #model = torch.nn.DataParallel(model)
     model.cuda()
     
     # define loss function (criterion)
@@ -84,11 +98,11 @@ def train_run(args):
 
     ## choose optimizer
     optimizer = make_optimizer(model.parameters(), args)
-    milestones = [100, 150]
-    if args.optimizer in ['sgd', 'ada']:
-        lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer, milestones=milestones, last_epoch=start_epoch - 1
-        )
+    #milestones = [100, 150]
+    #if args.optimizer in ['sgd', 'ada']:
+    #    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
+    #        optimizer, milestones=milestones, last_epoch=start_epoch - 1
+    #    )
     ## End optimizer setup
     
 
@@ -131,7 +145,9 @@ def train_run(args):
 
     cudnn.benchmark = True
 
-    normalize = xforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    mean = CIFAR10_TRAIN_MEAN if args.data == 'CIFAR10' else CIFAR100_TRAIN_MEAN
+    std  = CIFAR10_TRAIN_STD if args.data == 'CIFAR10' else CIFAR100_TRAIN_STD
+    normalize = xforms.Normalize(mean=mean, std=std)
     xforms_tr = [xforms.RandomHorizontalFlip(), xforms.RandomCrop(32, 4), xforms.ToTensor(), normalize]
 
     dataset_to_use = datasets.CIFAR10 if args.data == 'CIFAR10' else datasets.CIFAR100 if args.data == 'CIFAR100' else None
@@ -148,16 +164,19 @@ def train_run(args):
         return loss_va, prec1_va
 
     for epoch in tqdm(range(start_epoch, args.epochs), 'Epoch', ncols=80):
-        if args.optimizer in ['shampoo', 'krad', 'kradmm'] and epoch==1:
-            print([optimizer.state[x]['preconditioner']._transformed_shape for group in optimizer.param_groups for x in group['params']])
+        if args.optimizer in ['shampoo', 'krad', 'kradmm']:
+            if epoch==0:
+                print([x.size() for group in optimizer.param_groups for x in group['params']])
+            if epoch==1:
+                print([optimizer.state[x]['preconditioner']._transformed_shape for group in optimizer.param_groups for x in group['params']])
         # train for one epoch
         loss_tr, prec1_tr = train(train_loader, model, criterion, optimizer, epoch, args)
 
         
         # evaluate on validation set
         loss_va, prec1_va = validate(val_loader, model, criterion, args)
-        if args.optimizer in ['sgd', 'ada']:
-            lr_scheduler.step()
+        #if args.optimizer in ['sgd', 'ada']:
+        #    lr_scheduler.step()
         #elif args.optimizer in ['shampoo', 'krad', 'kradmm']:
         #    pow_ = bisect_right(milestones, epoch)
         #    for group in optimizer.param_groups:
@@ -249,6 +268,7 @@ if __name__ == '__main__':
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--weight_decay', type=float, default=0)
     parser.add_argument('--inverse_exponent_override', type=int, default=0)
+    parser.add_argument('--update_freq', type=int, default=1)
     parser.add_argument('--eps_str', type=str, default='1e-6')
     parser.add_argument('--lr_str', type=str, default='1e-1')
     parser.add_argument('--not_half', action='store_true')  # not that harmful

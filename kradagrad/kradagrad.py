@@ -83,20 +83,21 @@ class KrADPreconditioner(Preconditioner):
         # kradagrad
         exp = self.exponent_for_preconditioner()
         for i, stat in enumerate(self.statistics):
-            if stat.device.type == 'cpu':
+            if self._hps.iterative_matrix_roots:
+                self.preconditioners[i] = mf.mat_root(
+                    stat, exp,
+                    None,
+                    double=self._hps.double,
+                    iters=10, tol=1e-4, inner_iters=20, inner_tol=1e-6,
+                )
+            else:
                 try:
-                    self.preconditioners[i] = mf.matrix_power_svd(stat, 1 / exp) if exp > 1 else stat
+                    self.preconditioners[i] = mf.matrix_power_svd(stat, 1 / exp, double=self._hps.double) if exp > 1 else stat
                 except Exception as err:
                     if self.debug:
                         print('stat', stat)
                     raise err
-            else:
-                self.preconditioners[i] = mf.mat_root(
-                    stat, exp,
-                    #self.preconditioners[i][None, ...],
-                    None,
-                    iters=8, tol=1e-4, inner_iters=4, inner_tol=1e-3,
-                )
+
 
     @torch.no_grad()
     def partition_grad(self, grad):
@@ -313,7 +314,8 @@ class KradagradPP(Shampoo):
                     batch_stats[j, 0:sizes[j], 0:sizes[j]] = stats_this[j]
                 batch_root = bmf.mat_root(
                     batch_stats, exp, None,  # skipping warm start
-                    iters=8, tol=1e-4, inner_iters=4, inner_tol=1e-3
+                    double=self._hps.double,
+                    iters=10, tol=1e-4, inner_iters=20, inner_tol=1e-6
                 )
                 for j in range(bs_):
                     precs_this[j].copy_(batch_root[j, 0:sizes[j], 0:sizes[j]])

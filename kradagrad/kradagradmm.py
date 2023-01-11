@@ -101,14 +101,18 @@ class KrADmmPreconditioner(Preconditioner):
         for i in list(self.updated):
             stat = self.statistics[i]
             try:
-                if stat.device.type == 'cpu':
-                    self.preconditioners[i] = mf.matrix_power_svd(stat, 1 / exp) if exp > 1 else stat
-                else:
+                if self._hps.iterative_matrix_roots:
                     self.preconditioners[i] = mf.mat_root(
                         stat, exp,
                         self.preconditioners[i],
-                        iters=12, tol=1e-4,# debug=True
+                        double=self._hps.double,
+                        iters=10, tol=1e-4,
+                        inner_iters=20, inner_tol=1e-6,
+                        # debug=True
                     )
+                else:
+                    self.preconditioners[i] = mf.matrix_power_svd(stat, 1 / exp, double=self._hps.double) if exp > 1 else stat
+
             except Exception as err:
                 if self.debug:
                     print('stat', stat, '\nmat_root broke')

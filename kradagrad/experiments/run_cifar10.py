@@ -35,12 +35,13 @@ def run_sweep(args_sweep, n_proc, n_gpu, timeout, hundred=False):
                  'python', 'cifar10.py'] + 
                 (['--arch', 'resnet56',
                  '--data', 'CIFAR100',
-                  '--no_batch_norm'
+                  #'--no_batch_norm'
                 ] if hundred else []) + 
                 ['--optimizer', args.optimizer,
                  '--epochs', args.epochs,
                  '--lr_str', args.lr_str,
-                 '--eps_str', args.eps_str
+                 '--eps_str', args.eps_str,
+                 '>{}_ckpts/{}_{}_{}_{}.out'.format('resnet56_CIFAR100' if hundred else 'resnet32_CIFAR10', args.optimizer, args.epochs, args.lr_str, args.eps_str), '2>&1'
                 ]),
                 shell=True
             ))
@@ -52,7 +53,8 @@ if __name__ == '__main__':
     hyperparams_to_sweep_precon = SimpleNamespace(
         optimizer=['kradmm', 'krad', 'shampoo'],  
         epochs=['250'],
-        eps_str=['1e-6', '1e-4', '1e-2'],
+        #eps_str=['1e-6', '1e-4', '1e-2'],
+        eps_str=['1e-4'],
         lr_str=['1', '2.5e-1', '1e-1', '2.5e-2', '1e-2'],
     )
     args_sweep_precon = gen_sweep(hyperparams_to_sweep_precon.__dict__)

@@ -83,6 +83,10 @@ class ShampooHyperParams:
   graft_type: int = LayerwiseGrafting.SGD
   # Nesterov momentum
   nesterov: bool = True
+  # Use fp64? otherwise fp32
+  double: bool = False
+  # Use iterative methods for matrix roots? o/w eigh
+  iterative_matrix_roots: bool = False
 
 
 class Graft:
@@ -325,10 +329,11 @@ class Preconditioner:
     eps = self._hps.matrix_eps
     # shampoo
     for i, stat in enumerate(self.statistics):
-      if self.preconditioners[i].device.type == 'cpu':
-        self.preconditioners[i] = mf.matrix_power_svd(stat + eps * torch.eye(stat.size()[0]), -1/exp)
+      if self._hps.iterative_matrix_roots:
+        self.preconditioners[i] = matrix_functions.ComputePower(stat, exp, ridge_epsilon=eps, double=self._hps.double)
       else:
-        self.preconditioners[i] = matrix_functions.ComputePower(stat, exp, ridge_epsilon=eps)
+        self.preconditioners[i] = mf.matrix_power_svd(stat, -1/exp, double=self._hps.double, eps=eps)
+
 
   @torch.no_grad()
   def preconditioned_grad(self, grad, skip=[], unmerged=False):
