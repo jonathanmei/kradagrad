@@ -79,7 +79,8 @@ def MatPower(mat_m, p):
 def ComputePower(mat_g, p,
                  iter_count=100,
                  error_tolerance=1e-6,
-                 ridge_epsilon=1e-6):
+                 ridge_epsilon=1e-6,
+                double=False):
   """A method to compute G^{-1/p} using a coupled Newton iteration.
 
   See for example equation 3.2 on page 9 of:
@@ -99,6 +100,9 @@ def ComputePower(mat_g, p,
   Returns:
     (mat_g + rI)^{-1/p} (r = ridge_epsilon * max_eigenvalue of mat_g).
   """
+  orig_type = mat_g.dtype
+  if double:
+    mat_g = mat_g.type(torch.float64)
   shape = list(mat_g.shape)
   if len(shape) == 1:
     return torch.pow(mat_g + ridge_epsilon, -1/p)
@@ -137,4 +141,4 @@ def ComputePower(mat_g, p,
     mat_root = new_mat_root
     error = new_error
     count += 1
-  return mat_root
+  return mat_root.type(orig_type)

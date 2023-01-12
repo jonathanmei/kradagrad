@@ -8,6 +8,7 @@ from torch.optim.optimizer import Optimizer
 
 from . import math_utils as mu
 from . import positive_matrix_functions as mf
+from . import batched_matrix_functions as bmf
 from .third_party.shampoo import (
     Shampoo, Preconditioner,
     STEP, MOMENTUM, PRECONDITIONER, GRAFT,
@@ -82,20 +83,21 @@ class KrADPreconditioner(Preconditioner):
         # kradagrad
         exp = self.exponent_for_preconditioner()
         for i, stat in enumerate(self.statistics):
-            if stat.device.type == 'cpu':
+            if self._hps.iterative_matrix_roots:
+                self.preconditioners[i] = mf.mat_root(
+                    stat, exp,
+                    None,
+                    double=self._hps.double,
+                    iters=10, tol=1e-4, inner_iters=20, inner_tol=1e-6,
+                )
+            else:
                 try:
-                    self.preconditioners[i] = mf.matrix_power_svd(stat, 1 / exp) if exp > 1 else stat
+                    self.preconditioners[i] = mf.matrix_power_svd(stat, 1 / exp, double=self._hps.double) if exp > 1 else stat
                 except Exception as err:
                     if self.debug:
                         print('stat', stat)
                     raise err
-            else:
-                self.preconditioners[i] = mf.mat_root(
-                    stat[None, ...], exp,
-                    #self.preconditioners[i][None, ...],
-                    None,
-                    iters=8, tol=1e-4, inner_iters=4, inner_tol=1e-3,
-                )[0]  # mf.mat_root operates on batches
+
 
     @torch.no_grad()
     def partition_grad(self, grad):
@@ -279,10 +281,10 @@ class KradagradPP(Shampoo):
                         batch_stats_this_rank.add_(batch_stats_2_eps)
                     
                     
-                    batch_grad_mat = mf.batch_matricize(batch_grads, k)
+                    batch_grad_mat = bmf.batch_matricize(batch_grads, k)
                     ggt = batch_grad_mat.bmm(batch_grad_mat.transpose(-2, -1))
                     ggtl = ggt.bmm(batch_stats_this_rank.transpose(-2, -1))
-                    t_batch = -(1 + mf.matrices_norm(ggtl, 'fro'))
+                    t_batch = -(1 + bmf.matrices_norm(ggtl, 'fro'))
                     ggtl.mul_((1/t_batch)[..., None, None])
                     lggtl = batch_stats_this_rank.bmm(ggtl)
                     updated_stats = batch_stats_this_rank.add(lggtl)
@@ -310,9 +312,10 @@ class KradagradPP(Shampoo):
                 # fill batch of stats
                 for j in range(bs_):
                     batch_stats[j, 0:sizes[j], 0:sizes[j]] = stats_this[j]
-                batch_root = mf.mat_root(
+                batch_root = bmf.mat_root(
                     batch_stats, exp, None,  # skipping warm start
-                    iters=8, tol=1e-4, inner_iters=4, inner_tol=1e-3
+                    double=self._hps.double,
+                    iters=10, tol=1e-4, inner_iters=20, inner_tol=1e-6
                 )
                 for j in range(bs_):
                     precs_this[j].copy_(batch_root[j, 0:sizes[j], 0:sizes[j]])
