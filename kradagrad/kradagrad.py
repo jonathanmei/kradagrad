@@ -1,10 +1,8 @@
 ## Simple Kradagrad++ that extends official unoptimized Shampoo implementation
 
 from collections import defaultdict
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 
 import torch
-from torch.optim.optimizer import Optimizer
 
 from . import math_utils as mu
 from . import positive_matrix_functions as mf
@@ -12,7 +10,7 @@ from . import batched_matrix_functions as bmf
 from .third_party.shampoo import (
     Shampoo, Preconditioner,
     STEP, MOMENTUM, PRECONDITIONER, GRAFT,
-    LayerwiseGrafting, AdamGraft, AdagradGraft, SGDGraft, Graft
+    LayerwiseGrafting, AdamGraft, Graft
 )
 
 
@@ -50,30 +48,39 @@ class KrADPreconditioner(Preconditioner):
         damping = self._hps.matrix_eps > 0
         rank = len(self._transformed_shape)
         for j, grad in enumerate(partitioned_grads):
+            if self._hps.double:
+                grad = grad.double()
+            if self._hps.bf16:
+                grad = grad.bfloat16()
             for i in range(rank):
                 axes = list(range(i)) + list(range(i + 1, rank))
                 stat = self.statistics[j*rank + i]
                 if w1 < 1:
                     stat.mul_(1/w1)
 
-                if damping:
+                #if damping:
+                if False:
+                    if self._hps.bf16:
+                        stat = stat.bfloat16()
                     stat_2_eps = stat.mul(-self._hps.matrix_eps).mm(stat.T)
                     if self.debug and not stat_2_eps.isfinite().all():
                         print('stat2eps', stat_2_eps, '\nstat', stat)
                         raise ValueError('stat2eps broke')
-                    stat.add_(stat_2_eps)
+                    self.statistics[j*rank + i].add_(stat_2_eps)
+                    stat = self.statistics[j*rank + i]
 
                 ggt = torch.tensordot(grad, grad, [axes, axes])
                 if self.debug and not ggt.isfinite().all():
                     print('ggt', ggt, '\ngrad', grad)
                     raise ValueError('ggt broke')
 
-                ggtl = ggt.type_as(stat).mm(stat.T)
+                ggtl = ggt.mm(stat.type_as(ggt).T)
 
-                t_k = -(1 + mf.matrices_norm(ggtl, 'fro'))
+                t_k = -(1 + mf.matrices_norm(ggtl, 'tr'))
                 ggtl.mul_(1/t_k)
-                lggtl = stat.mm(ggtl)
+                lggtl = stat.type_as(ggtl).mm(ggtl)
                 self.statistics[j*rank + i].add_(lggtl)
+
 
 
     @torch.no_grad()
@@ -84,15 +91,19 @@ class KrADPreconditioner(Preconditioner):
         exp = self.exponent_for_preconditioner()
         for i, stat in enumerate(self.statistics):
             if self._hps.iterative_matrix_roots:
-                self.preconditioners[i] = mf.mat_root(
-                    stat, exp,
-                    None,
-                    double=self._hps.double,
-                    iters=10, tol=1e-4, inner_iters=20, inner_tol=1e-6,
-                )
+                self.preconditioners[i] = (
+                    mf.symmetrize(mf.mat_pow(mf.mat_inv_root(
+                        stat, exp,
+                        double=self._hps.double, iter_count=10
+                    ), exp-1).mm(stat)))
             else:
                 try:
-                    self.preconditioners[i] = mf.matrix_power_svd(stat, 1 / exp, double=self._hps.double) if exp > 1 else stat
+                    if self._hps.bf16:
+                        stat = stat.bfloat16()
+                    precon = mf.matrix_power_svd(stat, 1 / exp, double=self._hps.double) if exp > 1 else stat
+                    if self._hps.bf16:
+                        precon = precon.double() if self._hps.double else precon.float()
+                    self.preconditioners[i] = precon
                 except Exception as err:
                     if self.debug:
                         print('stat', stat)
@@ -119,6 +130,7 @@ class KradagradPP(Shampoo):
         # group by exponent, sort by size
         # group similar sizes together to minimize padding
         self.cpu = kwargs.get('cpu', False)
+        self.debug = kwargs.get('debug', False)
         self.initialized = False
         self._step = 0
         self.no_batch = not bool(tensor_batch_size)
@@ -136,7 +148,7 @@ class KradagradPP(Shampoo):
         """Initialize the PyTorch state of for a single variable."""
         # group by exponent for batching
         # we can further improve by sorting by size, but that requires advanced bookkeeping
-        prec = KrADPreconditioner(var, self.hps, eps_override=1.0)
+        prec = KrADPreconditioner(var, self.hps, eps_override=1/self.hps.matrix_eps, debug=self.debug)
         if not (self.cpu or self.no_batch):
             exp = prec.exponent_for_preconditioner()
             if len(prec.statistics) > 1:

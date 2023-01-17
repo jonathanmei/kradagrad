@@ -42,10 +42,17 @@ from torch.autograd import Variable
 
 __all__ = ['ResNet', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet1202']
 
-def _weights_init(m):
+def _weights_init(m, batch_norm: bool=True):
     classname = m.__class__.__name__
-    if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
-        init.kaiming_normal_(m.weight)
+    if batch_norm:
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+            init.kaiming_normal_(m.weight)
+    else:
+        if isinstance(m, nn.Conv2d):
+            nn.init.xavier_normal_(m.weight)
+        if isinstance(m, nn.Linear):
+            nn.init.constant_(m.bias, 0.0)
+            nn.init.xavier_uniform_(m.weight)
 
 class LambdaLayer(nn.Module):
     def __init__(self, lambd):
@@ -103,7 +110,8 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 64, num_blocks[2], stride=2, activation=activation, batch_norm=batch_norm)
         self.linear = nn.Linear(64, num_classes)
 
-        self.apply(_weights_init)
+        _weights_init_fun = lambda x: _weights_init(x, batch_norm=batch_norm)
+        self.apply(_weights_init_fun)
 
     def _make_layer(self, block, planes, num_blocks, stride, activation='relu', batch_norm=True):
         strides = [stride] + [1]*(num_blocks-1)
