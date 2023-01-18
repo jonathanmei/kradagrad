@@ -1,0 +1,39 @@
+Failure # 1 (occurred at 2023-01-10_04-01-43)
+[36mray::ImplicitFunc.train()[39m (pid=3478972, ip=10.20.9.19, repr=train_gem_pmnist)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/ray/tune/trainable/trainable.py", line 367, in train
+    raise skipped from exception_cause(skipped)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/ray/tune/trainable/function_trainable.py", line 335, in entrypoint
+    return self._trainable_func(
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/ray/tune/trainable/function_trainable.py", line 652, in _trainable_func
+    output = fn()
+  File "kradagrad/third_party/continual-learning-baselines/experiments/permuted_mnist/gem_2ord_ray.py", line 162, in train_gem_pmnist
+    cl_strategy.train(experience)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/templates/base_sgd.py", line 146, in train
+    super().train(experiences, eval_streams, **kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/templates/base.py", line 116, in train
+    self._train_exp(self.experience, eval_streams, **kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/templates/base_sgd.py", line 264, in _train_exp
+    self.training_epoch(**kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/templates/update_type/sgd_update.py", line 33, in training_epoch
+    self.optimizer_step()
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/templates/base_sgd.py", line 204, in optimizer_step
+    self.optimizer.step()
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/torch/optim/optimizer.py", line 140, in wrapper
+    out = func(*args, **kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/torch/autograd/grad_mode.py", line 27, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/luke.walters/code/experiments/kradagrad/kradagrad.py", line 159, in step
+    super().step(closure)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/torch/autograd/grad_mode.py", line 27, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/luke.walters/code/experiments/kradagrad/third_party/shampoo/shampoo.py", line 439, in step
+    preconditioner.compute_preconditioners()
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/torch/autograd/grad_mode.py", line 27, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/luke.walters/code/experiments/kradagrad/kradagrad.py", line 91, in compute_preconditioners
+    raise err
+  File "/home/luke.walters/code/experiments/kradagrad/kradagrad.py", line 87, in compute_preconditioners
+    self.preconditioners[i] = mf.matrix_power_svd(stat, 1 / exp) if exp > 1 else stat
+  File "/home/luke.walters/code/experiments/kradagrad/positive_matrix_functions.py", line 269, in matrix_power_svd
+    u, s, v = torch.svd(matrix)
+torch._C._LinAlgError: linalg.svd: The algorithm failed to converge because the input matrix is ill-conditioned or has too many repeated singular values (error code: 23).

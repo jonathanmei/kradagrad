@@ -1,0 +1,6 @@
+{
+  "eps": 0.0001,
+  "lr": 1,
+  "optimizer": "shampoo",
+  "seed": 200
+}

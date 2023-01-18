@@ -1,0 +1,30 @@
+Failure # 1 (occurred at 2023-01-11_02-11-51)
+[36mray::ImplicitFunc.train()[39m (pid=3806735, ip=10.20.9.19, repr=train_gem_pmnist)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/ray/tune/trainable/trainable.py", line 367, in train
+    raise skipped from exception_cause(skipped)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/ray/tune/trainable/function_trainable.py", line 335, in entrypoint
+    return self._trainable_func(
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/ray/tune/trainable/function_trainable.py", line 652, in _trainable_func
+    output = fn()
+  File "kradagrad/third_party/continual-learning-baselines/experiments/permuted_mnist/gem_2ord_ray.py", line 166, in train_gem_pmnist
+    cl_strategy.train(experience)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/templates/base_sgd.py", line 146, in train
+    super().train(experiences, eval_streams, **kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/templates/base.py", line 116, in train
+    self._train_exp(self.experience, eval_streams, **kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/templates/base_sgd.py", line 264, in _train_exp
+    self.training_epoch(**kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/templates/update_type/sgd_update.py", line 29, in training_epoch
+    self._after_backward(**kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/templates/base_sgd.py", line 409, in _after_backward
+    trigger_plugins(self, "after_backward", **kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/utils.py", line 35, in trigger_plugins
+    getattr(p, event)(strategy, **kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/torch/autograd/grad_mode.py", line 27, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/plugins/gem.py", line 93, in after_backward
+    v_star = self.solve_quadprog(g).to(strategy.device)
+  File "/home/luke.walters/miniconda3/envs/kradagrad/lib/python3.8/site-packages/avalanche/training/plugins/gem.py", line 178, in solve_quadprog
+    v = quadprog.solve_qp(P, q, G, h)[0]
+  File "quadprog/quadprog.pyx", line 103, in quadprog.solve_qp
+ValueError: constraints are inconsistent, no solution
