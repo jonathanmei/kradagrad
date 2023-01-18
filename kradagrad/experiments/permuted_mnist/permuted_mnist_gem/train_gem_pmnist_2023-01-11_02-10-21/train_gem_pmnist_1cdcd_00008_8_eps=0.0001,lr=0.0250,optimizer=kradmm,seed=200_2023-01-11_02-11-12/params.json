@@ -1,6 +1,0 @@
-{
-  "eps": 0.0001,
-  "lr": 0.025,
-  "optimizer": "kradmm",
-  "seed": 200
-}
