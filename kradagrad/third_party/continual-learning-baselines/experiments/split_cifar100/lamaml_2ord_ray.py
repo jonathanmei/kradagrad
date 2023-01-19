@@ -12,6 +12,7 @@ from models.models_lamaml import MTConvCIFAR
 from ray import tune
 from ray.air import session
 from ray.air.checkpoint import Checkpoint
+from ray.tune.schedulers import ASHAScheduler
 from torch.nn import CrossEntropyLoss
 from torch.optim import SGD, Adam
 
@@ -61,7 +62,7 @@ def get_optimizer(
             tensor_batch_size=0,
         )  # tensor batching only for single run
 
-    if optimizer == "sgd":
+    elif optimizer in ["sgd","learned_lr"]:
         optimizer = torch.optim.SGD(
             params, lr, weight_decay=weight_decay, momentum=momentum
         )
@@ -79,32 +80,24 @@ def lamaml_scifar100(config):
     https://arxiv.org/abs/2007.13904
     """
     # Args
+
+
+    sync_update = False if config['optimizer'] == 'learned_lr' else True
     args = create_default_args(
-        {
-            "cuda": 0,
-            "n_inner_updates": 5,
-            "second_order": True,
-            "grad_clip_norm": 1.0,
-            "learn_lr": True,
-            "lr_alpha": 0.25,
-            "sync_update": False,
-            "mem_size": 200,
-            "lr": 0.1,
-            "train_mb_size": 10,
-            "train_epochs": 10,
-            "seed": None,
-            "optimizer": "sgd",
-            "eps": 1e-6,
-        },
-        config,
+        {'cuda': 0, 'n_inner_updates': 5, 'second_order': True,
+         'grad_clip_norm': 1.0, 'learn_lr': True, 'lr_alpha': 0.25,
+         'sync_update': sync_update, 'mem_size': 200, 'lr': 0.1,
+         'train_mb_size': 10, 'train_epochs': 10, 'seed': None,
+         'optimizer': 'sgd','eps': 1e-6}, config
     )
 
     set_seed(args.seed)
-    device = torch.device(
-        f"cuda:{args.cuda}" if torch.cuda.is_available() and args.cuda >= 0 else "cpu"
-    )
+    device = torch.device(f"cuda:{args.cuda}"
+                          if torch.cuda.is_available() and
+                          args.cuda >= 0 else "cpu")
     # Benchmark
-    benchmark = avl.benchmarks.SplitCIFAR100(n_experiences=20, return_task_id=True)
+    benchmark = avl.benchmarks.SplitCIFAR100(n_experiences=20,
+                                             return_task_id=True)
 
     # Loggers and metrics
     interactive_logger = avl.logging.InteractiveLogger()
@@ -112,9 +105,10 @@ def lamaml_scifar100(config):
 
     evaluation_plugin = avl.training.plugins.EvaluationPlugin(
         metrics.accuracy_metrics(epoch=True, experience=True, stream=True),
-        loggers=[interactive_logger, tb_logger],
-    )
+        loggers=[interactive_logger, tb_logger])
 
+    
+    
     # Buffer
     rs_buffer = ReservoirSamplingBuffer(max_size=args.mem_size)
     replay_plugin = ReplayPlugin(
@@ -122,22 +116,22 @@ def lamaml_scifar100(config):
         batch_size=args.train_mb_size,
         batch_size_mem=args.train_mb_size,
         task_balanced_dataloader=False,
-        storage_policy=rs_buffer,
+        storage_policy=rs_buffer
     )
 
     # Strategy
     model = MTConvCIFAR()
 
     optimizer = get_optimizer(
-        model.parameters(),
-        optimizer=args.optimizer,
-        lr=args.lr,
-        eps=args.eps,
-    )
+            model.parameters(),
+            optimizer=args.optimizer,
+            lr=args.lr,
+            eps=args.eps,
+        )
 
     cl_strategy = LaMAML(
         model,
-        torch.optim.SGD(model.parameters(), lr=args.lr),
+        optimizer,
         CrossEntropyLoss(),
         n_inner_updates=args.n_inner_updates,
         second_order=args.second_order,
@@ -157,34 +151,73 @@ def lamaml_scifar100(config):
     for experience in benchmark.train_stream:
         cl_strategy.train(experience)
         res = cl_strategy.eval(benchmark.test_stream)
+        session.report(res)
     return res
 
 
-if __name__ == "__main__":
-    config_2ord = {
-        "lr": tune.grid_search([1, 2.5e-1, 1e-1, 2.5e-2, 1e-2]),
-        "optimizer": tune.grid_search(["shampoo", "krad", "kradmm"]),
-        "seed": tune.grid_search([100, 200, 300]),
-        "eps": tune.grid_search([1e-4]),
-    }
-    config_1ord = {
-        "lr": tune.grid_search([1e-1, 5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3]),
-        "optimizer": tune.grid_search(["sgd", "adam"]),
-        "seed": tune.grid_search([100, 200, 300]),
-        "eps": tune.grid_search([1e-6]),
-    }
+if __name__ == '__main__':
 
     trainer = tune.with_resources(
-        tune.with_parameters(lamaml_scifar100), resources={"cpu": 1, "gpu": 1.0 / 12.0}
-    )
-
+            tune.with_parameters(lamaml_scifar100),
+            resources={"cpu": 1, "gpu": 1.0/12.0}
+        )
+   
     tune_config = tune.TuneConfig(
         metric="Top1_Acc_Stream/eval_phase/test_stream/Task019",
         mode="max",
         num_samples=1,
+        scheduler=ASHAScheduler(max_t=20, grace_period=10)
     )
-    tuner = tune.Tuner(trainer, param_space=config_1ord, tune_config=tune_config)
-    results_1ord = tuner.fit()
 
-    tuner = tune.Tuner(trainer, param_space=config_2ord, tune_config=tune_config)
-    results_2ord = tuner.fit()
+    # config_2ord = {
+    #     "lr": tune.grid_search([1, 2.5e-1, 1e-1, 2.5e-2, 1e-2]),
+    #     "optimizer": tune.grid_search(["kradmm"]),
+    #     "seed": tune.grid_search([100, 200]),
+    #     "eps": tune.grid_search([1e-4]),
+    # }
+    # config_1ord = {
+    #     "lr": tune.grid_search([1e-1, 5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3]),
+    #     "optimizer": tune.grid_search(["sgd", "adam"]),
+    #     "seed": tune.grid_search([100, 200]),
+    #     "eps": tune.grid_search([1e-6]),
+    # }
+
+    configs = {}
+
+   
+
+    # for opt in ["kradmm"]:
+    #     configs[opt] = {
+    #         "optimizer": tune.grid_search([opt]),
+    #         "lr": tune.grid_search([1, 2.5e-1, 1e-1, 2.5e-2, 1e-2]),
+    #         "seed": tune.grid_search([100, 200]),
+    #         "eps": 1e-4,
+    #     }
+
+    for opt in ["sgd", "adam"]:
+        configs[opt] = {
+            "optimizer": tune.grid_search([opt]),
+            "lr": tune.grid_search([1e-1, 5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3]),
+            "seed": tune.grid_search([100, 200]),
+            "eps": 1e-6,
+        }
+    
+    configs['learned_lr'] = d{
+        "lr": .01,
+        "optimizer": tune.grid_search(["learned_lr"]),
+        "seed": tune.grid_search([100, 200]),
+        "eps": 1e-6,
+    }
+    results = {}
+
+    for name, params in configs.items():
+    
+        tuner = tune.Tuner(
+            trainer, param_space=params, tune_config=tune_config
+        )
+        
+        
+        results[name]= tuner.fit()
+
+    print(results)
+    torch.save('final_ray_results',results)
