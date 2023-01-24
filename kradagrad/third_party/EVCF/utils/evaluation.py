@@ -37,6 +37,7 @@ def evaluate_vae(args, model, train_loader, data_loader, epoch, dir, mode):
         normalized discounted cumulative gain@k for binary relevance
         ASSUMPTIONS: all the 0's in heldout_data indicate 0 relevance
         """
+
         batch_users = X_pred.shape[0]
         idx_topk_part = bn.argpartition(-X_pred, k, axis=1)
         topk_part = X_pred[np.arange(batch_users)[:, np.newaxis], idx_topk_part[:, :k]]
@@ -56,20 +57,23 @@ def evaluate_vae(args, model, train_loader, data_loader, epoch, dir, mode):
         IDCG = torch.tensor(
             [(tp[: min(n, k)]).sum() for n in (heldout_batch != 0).sum(dim=1)]
         )
-        return DCG / IDCG
+
+        return DCG / (IDCG + 1e-10)
 
     def Recall_at_k_batch(X_pred, heldout_batch, k=100):
+
         batch_users = X_pred.shape[0]
 
         idx = bn.argpartition(-X_pred, k, axis=1)
         X_pred_binary = np.zeros_like(X_pred, dtype=bool)
         X_pred_binary[np.arange(batch_users)[:, np.newaxis], idx[:, :k]] = True
 
-        X_true_binary = torch.tensor((heldout_batch > 0), dtype=torch.float)
+        X_true_binary = torch.tensor((heldout_batch > 0), dtype=torch.float).cpu()
         tmp = torch.tensor(
             np.logical_and(X_true_binary, X_pred_binary), dtype=torch.float
         ).sum(dim=1)
-        recall = tmp / np.minimum(k, X_true_binary.sum(dim=1))
+
+        recall = tmp / (1e-10 + np.minimum(k, X_true_binary.sum(dim=1)))
         return recall
 
     # evaluate
@@ -125,53 +129,37 @@ def evaluate_vae(args, model, train_loader, data_loader, epoch, dir, mode):
     evaluate_kl /= len(data_loader)  # kl already averages over batch size
 
     evaluate_ndcg = ndcg_dist.mean().data.item()
+    ndcg_100 = ndcg_dist
+    if mode == "test":
+        metrics_mean = {}
+        metrics_std = {}
+        for name, metric in zip(
+            [
+                "ndcg_100",
+                "ndcg_20",
+                "ndcg_10",
+                "recall_50",
+                "recall_20",
+                "recall_10",
+                "recall_5",
+                "recall_1",
+            ],
+            [
+                ndcg_100,
+                ndcg_20,
+                ndcg_10,
+                recall_50,
+                recall_20,
+                recall_10,
+                recall_5,
+                recall_1,
+            ],
+        ):
+
+            metrics_mean[name] = metric.mean().data.item()
+            metrics_std[name] = metric.std().data.item() / np.sqrt(len(metric))
 
     if mode == "test":
-        eval_ndcg100 = "{:.5f}({:.4f})".format(
-            evaluate_ndcg, ndcg_dist.std().data.item() / np.sqrt(len(ndcg_dist))
-        )
-        eval_ndcg20 = "{:.5f}({:.4f})".format(
-            ndcg_20.mean().data.item(),
-            ndcg_20.std().data.item() / np.sqrt(len(ndcg_20)),
-        )
-        eval_ndcg10 = "{:.5f}({:.4f})".format(
-            ndcg_10.mean().data.item(),
-            ndcg_10.std().data.item() / np.sqrt(len(ndcg_10)),
-        )
-        eval_recall50 = "{:.5f}({:.4f})".format(
-            recall_50.mean().data.item(),
-            recall_50.std().data.item() / np.sqrt(len(recall_50)),
-        )
-        eval_recall20 = "{:.5f}({:.4f})".format(
-            recall_20.mean().data.item(),
-            recall_20.std().data.item() / np.sqrt(len(recall_20)),
-        )
-        eval_recall10 = "{:.5f}({:.4f})".format(
-            recall_10.mean().data.item(),
-            recall_10.std().data.item() / np.sqrt(len(recall_10)),
-        )
-        eval_recall5 = "{:.5f}({:.4f})".format(
-            recall_5.mean().data.item(),
-            recall_5.std().data.item() / np.sqrt(len(recall_5)),
-        )
-        eval_recall1 = "{:.5f}({:.4f})".format(
-            recall_1.mean().data.item(),
-            recall_1.std().data.item() / np.sqrt(len(recall_1)),
-        )
-
-    if mode == "test":
-        return (
-            evaluate_loss,
-            evaluate_re,
-            evaluate_kl,
-            eval_ndcg100,
-            eval_ndcg20,
-            eval_ndcg10,
-            eval_recall50,
-            eval_recall20,
-            eval_recall10,
-            eval_recall5,
-            eval_recall1,
-        )
+        return (evaluate_loss, evaluate_re, evaluate_kl, metrics_mean, metrics_std)
     else:
         return evaluate_loss, evaluate_re, evaluate_kl, evaluate_ndcg

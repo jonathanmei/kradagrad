@@ -50,9 +50,13 @@ def experiment_vae(
 
     for epoch in range(1, args.epochs + 1):
         time_start = time.time()
+
         model, train_loss_epoch, train_re_epoch, train_kl_epoch = train(
             epoch, args, train_loader, model, optimizer
         )
+        # import ipdb
+
+        # ipdb.set_trace()
 
         writer.add_scalar("Loss/train", train_loss_epoch, epoch)
         writer.add_scalar("Loss/train_re", train_re_epoch, epoch)
@@ -66,6 +70,26 @@ def experiment_vae(
         writer.add_scalar("Loss/val_re", val_re_epoch, epoch)
         writer.add_scalar("Loss/val_kl", val_kl_epoch, epoch)
         writer.add_scalar("Loss/val_ndcg", val_ndcg_epoch, epoch)
+
+        (
+            test_loss,
+            test_re,
+            test_kl,
+            metrics_mean,
+            metrics_std,
+        ) = evaluate(args, model, train_loader, test_loader, 9999, dir, mode="test")
+
+        writer.add_scalar("Loss/test", test_loss, epoch)
+        writer.add_scalar("Loss/test_re", test_re, epoch)
+        writer.add_scalar("Loss/test_kl", test_kl, epoch)
+        writer.add_scalar("Loss/test_ndcg", metrics_mean["ndcg_100"], epoch)
+        writer.add_scalar("Loss/eval_ndcg20", metrics_mean["ndcg_20"], epoch)
+        writer.add_scalar("Loss/eval_ndcg10", metrics_mean["ndcg_10"], epoch)
+        writer.add_scalar("Loss/eval_recall50", metrics_mean["recall_50"], epoch)
+        writer.add_scalar("Loss/eval_recall20", metrics_mean["recall_20"], epoch)
+        writer.add_scalar("Loss/eval_recall10", metrics_mean["recall_10"], epoch)
+        writer.add_scalar("Loss/eval_recall5", metrics_mean["recall_5"], epoch)
+        writer.add_scalar("Loss/eval_recall1", metrics_mean["recall_1"], epoch)
 
         time_end = time.time()
 
@@ -134,33 +158,33 @@ def experiment_vae(
         if math.isnan(val_loss_epoch):
             break
 
-    # FINAL EVALUATION
-    best_model = torch.load(dir + args.model_name + ".model")
-    (
-        test_loss,
-        test_re,
-        test_kl,
-        test_ndcg,
-        eval_ndcg20,
-        eval_ndcg10,
-        eval_recall50,
-        eval_recall20,
-        eval_recall10,
-        eval_recall5,
-        eval_recall1,
-    ) = evaluate(args, best_model, train_loader, test_loader, 9999, dir, mode="test")
+    # # FINAL EVALUATION
+    # best_model = torch.load(dir + args.model_name + ".model")
+    # (
+    #     test_loss,
+    #     test_re,
+    #     test_kl,
+    #     test_ndcg,
+    #     eval_ndcg20,
+    #     eval_ndcg10,
+    #     eval_recall50,
+    #     eval_recall20,
+    #     eval_recall10,
+    #     eval_recall5,
+    #     eval_recall1,
+    # ) = evaluate(args, best_model, train_loader, test_loader, 9999, dir, mode="test")
 
-    writer.add_scalar("Loss/test", test_loss, epoch)
-    writer.add_scalar("Loss/test_re", test_re, epoch)
-    writer.add_scalar("Loss/test_kl", test_kl, epoch)
-    writer.add_scalar("Loss/test_ndcg", test_ndcg, epoch)
-    writer.add_scalar("Loss/eval_ndcg20", eval_ndcg20, epoch)
-    writer.add_scalar("Loss/eval_ndcg10", eval_ndcg10, epoch)
-    writer.add_scalar("Loss/eval_recall50", eval_recall50, epoch)
-    writer.add_scalar("Loss/eval_recall20", eval_recall20, epoch)
-    writer.add_scalar("Loss/eval_recall10", eval_recall10, epoch)
-    writer.add_scalar("Loss/eval_recall5", eval_recall5, epoch)
-    writer.add_scalar("Loss/eval_recall1", eval_recall1, epoch)
+    # writer.add_scalar("Loss/test", test_loss, epoch)
+    # writer.add_scalar("Loss/test_re", test_re, epoch)
+    # writer.add_scalar("Loss/test_kl", test_kl, epoch)
+    # writer.add_scalar("Loss/test_ndcg", test_ndcg, epoch)
+    # writer.add_scalar("Loss/eval_ndcg20", eval_ndcg20, epoch)
+    # writer.add_scalar("Loss/eval_ndcg10", eval_ndcg10, epoch)
+    # writer.add_scalar("Loss/eval_recall50", eval_recall50, epoch)
+    # writer.add_scalar("Loss/eval_recall20", eval_recall20, epoch)
+    # writer.add_scalar("Loss/eval_recall10", eval_recall10, epoch)
+    # writer.add_scalar("Loss/eval_recall5", eval_recall5, epoch)
+    # writer.add_scalar("Loss/eval_recall1", eval_recall1, epoch)
 
     writer.flush()
 

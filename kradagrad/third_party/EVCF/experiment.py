@@ -355,41 +355,49 @@ if __name__ == "__main__":
     trainer = tune.with_resources(
         tune.with_parameters(trainable), resources={"cpu": 3, "gpu": 1.0 / 4.0}
     )
-    scheduler = ASHAScheduler(max_t=args.epochs, grace_period=50)
+    # scheduler = ASHAScheduler(
+    #     max_t=args.epochs, grace_period=50, metric="val_loss", mode="min"
+    # )
 
-    tune_config = tune.TuneConfig(
-        metric="val_loss",
-        mode="min",
-        num_samples=1,
-        scheduler=scheduler,
-    )
+    tune_config = tune.TuneConfig(num_samples=1)
 
     configs = {}
 
-    for opt in ["kradmm", "krad"]:
+    for opt in ["krad"]:
         configs[opt] = {
             "optimizer": tune.grid_search([opt]),
-            "lr": tune.grid_search([2e-4, 1e-4, 5e-5, 2.5e-5, 1.25e-5, 6.25e-6]),
-            "seed": tune.grid_search([100, 200]),
+            "lr": tune.grid_search([2e-4]),
+            "seed": tune.grid_search([200]),
             "eps": 1e-4,
         }
 
-    for opt in ["sgd", "adam_normgrad"]:
-        configs[opt] = {
-            "optimizer": tune.grid_search([opt]),
-            "lr": tune.grid_search([4e-4, 2e-4, 1e-4, 5e-5, 2.5e-5, 1.25e-5]),
-            "seed": tune.grid_search([100, 200]),
-            "eps": 1e-6,
+    # for opt in ["adam_normgrad"]:
+    #     configs[opt] = {
+    #         "optimizer": tune.grid_search([opt]),
+    #         "lr": tune.grid_search([4e-4, 2e-4, 1e-4, 5e-5, 2.5e-5, 1.25e-5]),
+    #         "seed": tune.grid_search([100]),
+    #         "eps": 1e-6,
+    #     }
+
+    # results = {}
+
+    if 0:
+        for name, params in configs.items():
+
+            tuner = tune.Tuner(trainer, param_space=params, tune_config=tune_config)
+            tuner.fit()
+    else:
+        config = {
+            "optimizer": "krad",
+            "lr": 2e-4,
+            "seed": 200,
+            "eps": 1e-4,
         }
+        trainable(config)
 
-    results = []
-    for name, params in configs.items():
+        # results[name] = tuner.fit()
 
-        tuner = tune.Tuner(trainer, param_space=params, tune_config=tune_config)
-
-        results[name] = tuner.fit()
-
-    torch.save(results, "ray_tune_results")
+    # torch.save(results, "ray_tune_results")
 
 # # # # # # # # # # #
 # END EXPERIMENTS # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
