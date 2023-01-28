@@ -21,6 +21,7 @@ def experiment_vae(
     optimizer,
     dir,
     log_dir,
+    epoch_init=1,
     model_name="vae",
 ):
     from utils.evaluation import evaluate_vae as evaluate
@@ -46,9 +47,9 @@ def experiment_vae(
 
     time_history = []
 
-    writer = SummaryWriter(comment="lr={:.7f}".format(args.lr))
+    writer = SummaryWriter(log_dir=args.tb_dir)
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(args.epoch_init, args.epochs + 1):
         time_start = time.time()
 
         model, train_loss_epoch, train_re_epoch, train_kl_epoch = train(
@@ -147,6 +148,7 @@ def experiment_vae(
             # best_model = model
             print("->model saved<-")
             torch.save(model, dir + args.model_name + ".model")
+            torch.save(optimizer.state_dict(), dir + args.model_name + ".opt_state")
         else:
             e += 1
             if epoch < args.warmup:

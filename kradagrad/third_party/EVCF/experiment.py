@@ -149,6 +149,31 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "--model_dir",
+    type=str,
+    default=None,
+)
+
+parser.add_argument(
+    "--epoch_init",
+    type=int,
+    default=1,
+)
+
+parser.add_argument(
+    "--model_init",
+    type=str,
+    default=None,
+)
+
+parser.add_argument(
+    "--tb_dir",
+    type=str,
+    default=None,
+)
+
+
+parser.add_argument(
     "--input_type",
     type=str,
     default="binary",
@@ -261,7 +286,10 @@ def run(config, args, kwargs):
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
 
-    dir = args.model_signature + "_" + model_name + "/"
+    if args.model_dir is None:
+        dir = args.model_signature + "_" + model_name + "/"
+    else:
+        dir = args.model_dir
 
     if not os.path.exists(dir):
         os.makedirs(dir)
@@ -289,6 +317,10 @@ def run(config, args, kwargs):
         raise Exception("Wrong name of the model!")
 
     model = VAE(args)
+
+    if args.model_init is not None:
+        model = torch.load(args.model_init)
+
     if args.cuda:
         model.cuda()
 
@@ -302,11 +334,21 @@ def run(config, args, kwargs):
             optimizer=args.optimizer,
             lr=config["lr"],
             eps=config["eps"],
-            double=True if args.optimizer == "shampoo" else False,
+            double=(True if args.optimizer == "shampoo" else False)
+            and config["double"],
             iterative_roots=False,
             block_size=600,
         )
     )
+
+    # import ipdb
+
+    # ipdb.set_trace()
+    try:
+        opt_state_dict = torch.load(os.path.join(dir, args.model_name + ".opt_state"))
+        optimizer.load_state_dict(opt_state_dict)
+    except:
+        print("Could not load optimizer state dict")
 
     # ======================================================================================================================
     print(args)
@@ -328,6 +370,7 @@ def run(config, args, kwargs):
         dir,
         log_dir,
         model_name=args.model_name,
+        epoch_init=args.epoch_init,
     )
 
     # os.makedirs("my_model", exist_ok=True)
@@ -363,13 +406,33 @@ if __name__ == "__main__":
 
     configs = {}
 
-    for opt in ["krad"]:
-        configs[opt] = {
-            "optimizer": tune.grid_search([opt]),
-            "lr": tune.grid_search([2e-4]),
-            "seed": tune.grid_search([200]),
-            "eps": 1e-4,
-        }
+    def get_eps(opt):
+        if opt == "krad":
+            return 1e-3
+        elif opt in ["kradmm", "shampoo"]:
+            return 1e-4
+        else:
+            return 1e-6
+
+    # config = {
+    #     "optimizer": tune.grid_search(
+    #         ["krad", "kradmm", "shampoo", "sgd", "adam", "adam_normgrad"]
+    #     ),
+    #     "lr": tune.sample_from(
+    #         lambda spec: 2.5e-5 if "adam" in spec.config.optimizer else 2e-4
+    #     ),
+    #     "seed": tune.grid_search([100]),
+    #     "eps": tune.sample_from(lambda spec: get_eps(spec.config.optimizer)),
+    # }
+    config = {
+        "optimizer": tune.grid_search(["shampoo"]),
+        "lr": tune.sample_from(
+            lambda spec: 2.5e-5 if "adam" in spec.config.optimizer else 2e-4
+        ),
+        "seed": tune.grid_search([100]),
+        "eps": tune.sample_from(lambda spec: get_eps(spec.config.optimizer)),
+        "double": tune.grid_search([False]),
+    }
 
     # for opt in ["adam_normgrad"]:
     #     configs[opt] = {
@@ -382,16 +445,22 @@ if __name__ == "__main__":
     # results = {}
 
     if 0:
-        for name, params in configs.items():
 
-            tuner = tune.Tuner(trainer, param_space=params, tune_config=tune_config)
-            tuner.fit()
+        tuner = tune.Tuner(trainer, param_space=config, tune_config=tune_config)
+        tuner.fit()
     else:
         config = {
             "optimizer": "krad",
             "lr": 2e-4,
-            "seed": 200,
-            "eps": 1e-4,
+            "seed": 100,
+            "eps": 1e-3,
+        }
+
+        config = {
+            "optimizer": "kradmm",
+            "lr": 2e-4,
+            "seed": 100,
+            "eps": 1e-3,
         }
         trainable(config)
 

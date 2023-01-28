@@ -42,6 +42,8 @@ def convert_tb_data(root_dir, sort_by=None):
         )
 
     columns_order = ["wall_time", "name", "step", "value", "root"]
+    
+    import ipdb; ipdb.set_trace()
 
     out = []
     for (root, _, filenames) in os.walk(root_dir):
