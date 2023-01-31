@@ -38,7 +38,8 @@ def run_sweep(args_sweep, n_proc, n_gpu, timeout, hundred=False):
                 ] if hundred else []) + 
                 ['--optimizer', args.optimizer,
                  #'--bf16' if args.optimizer in ['krad', 'kradmm'] else '',  # seems to break
-                 '--double', if args.optimizer in ['shampoo'] else '',
+                 #'--double', if args.optimizer in ['shampoo'] else '',
+                 #'--double', latest run is double with krad and 32 with shampoo
                  '--epochs', args.epochs,
                  '--lr_str', args.lr_str,
                  '--eps_str', args.eps_str,
@@ -65,10 +66,11 @@ if __name__ == '__main__':
     #    lr_str=['1e-1', '2.5e-2', '1e-2', '2.5e-3'],  # for CIFAR100
     #)
     hyperparams_to_sweep_precon = SimpleNamespace(
-        optimizer=['kradmm', 'krad'],  
+        #optimizer=['kradmm', 'krad'],  
+        optimizer=['shampoo'],  
         epochs=['250'],
         eps_str=['1e-4'],
-        lr_str=['2.5e-1', '1e-1', '2.5e-2', '1e-2', '2.5e-3', '1e-3'],  # for CIFAR100
+        lr_str=['2.5e-1', '1e-1', '2.5e-2', '1e-2', '2.5e-3', '1e-3', '2.5e-4'],  # for CIFAR100
     )
     args_sweep_precon = gen_sweep(hyperparams_to_sweep_precon.__dict__)
 
@@ -94,5 +96,5 @@ if __name__ == '__main__':
     n_proc = 24
     n_gpu = 2
     timeout = 10
-    run_sweep(args_sweeps, n_proc, n_gpu, timeout)
-    #run_sweep(args_sweeps, n_proc, n_gpu, timeout, hundred=True)
+    #run_sweep(args_sweeps, n_proc, n_gpu, timeout)
+    run_sweep(args_sweeps, n_proc, n_gpu, timeout, hundred=True)

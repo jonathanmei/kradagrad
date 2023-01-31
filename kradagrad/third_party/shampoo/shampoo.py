@@ -91,6 +91,9 @@ class ShampooHyperParams:
   iterative_matrix_roots: bool = False
   #Kradapoo only:
   kradapoo_type: int = 1
+  replace_preconditioner_steps: int = 1
+  kry_qr: int = 0
+  low_rank: int = 25
 
 
 class Graft:
@@ -314,12 +317,12 @@ class Preconditioner:
     reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
     partitioned_grads = self._partitioner.partition(reshaped_grad)
     for j, grad in enumerate(partitioned_grads):
+      if self._hps.double:
+          grad = grad.double()
+      if self._hps.bf16:
+          grad = grad.bfloat16()
       for i in range(rank):
         axes = list(range(i)) + list(range(i + 1, rank))
-        if self._hps.double:
-            grad = grad.double()
-        if self._hps.bf16:
-            grad = grad.bfloat16()
         stat = torch.tensordot(grad, grad, [axes, axes])
         self.statistics[j*rank + i].mul_(w1).add_(stat, alpha=w2)
 
@@ -341,7 +344,7 @@ class Preconditioner:
       if self._hps.iterative_matrix_roots:
         self.preconditioners[i] = matrix_functions.ComputePower(stat, exp, ridge_epsilon=eps, double=self._hps.double)
       else:
-        self.preconditioners[i] = mf.matrix_power_svd(stat, -1/exp, double=self._hps.double, eps=eps)
+        self.preconditioners[i] = mf.matrix_power_svd(stat, -1/exp, double=self._hps.double, eig_eps=eps)
 
 
   @torch.no_grad()
