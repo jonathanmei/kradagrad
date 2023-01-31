@@ -7,8 +7,8 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
 import torch
 from torch.optim.optimizer import Optimizer
 
-from . import positive_matrix_functions as mf
-from .third_party.shampoo import (
+from .. import positive_matrix_functions as mf
+from ..third_party.shampoo import (
     Shampoo, Preconditioner,
     STEP, MOMENTUM, PRECONDITIONER, GRAFT,
     LayerwiseGrafting, AdamGraft, AdagradGraft, SGDGraft, Graft
@@ -33,7 +33,7 @@ class KrADapooPreconditioner(Preconditioner):
         if rank < 1:
             self.sham_stats = []
         else:
-            eps = eps_override if eps_override is not None else hps.matrix_epsilon
+            eps = eps_override if eps_override is not None else 1/hps.matrix_eps
             self.sham_stats = [eps * torch.eye(s[0], device=device, dtype=precision) for s in shapes]
         
     @torch.no_grad()
@@ -161,7 +161,7 @@ class Kradapoo(Shampoo):
     @torch.no_grad()
     def init_var_state(self, var, state):
         """Initialize the PyTorch state of for a single variable."""
-        prec = KrADapooPreconditioner(var, self.hps, eps_override=1.0, debug=self.debug)
+        prec = KrADapooPreconditioner(var, self.hps, eps_override=1/self.hps.matrix_eps, debug=self.debug)
 
         # original, pared down        
         var = var.detach()

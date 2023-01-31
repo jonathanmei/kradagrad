@@ -309,15 +309,18 @@ def matrix_sqrt_NS(A: torch.Tensor, iters: int=25, tol: float=1e-5, batched: boo
     return Y.type(orig_type)
 
 @torch.no_grad()
-def matrix_power_svd(matrix: torch.Tensor, power: float, double: bool=False, matrix_eps=1e-8, eps=0, **unused) -> torch.Tensor:
+def matrix_power_svd(matrix: torch.Tensor, power: float, double: bool=False, matrix_eps=1e-8, eig_eps=0, **unused) -> torch.Tensor:
     # Really, use hermitian eigenvalue decomposition
+    if unused:
+        print(f'warning, `matrix_power_svd` got unused keywords: {list(unused.keys())}')
     orig_type = matrix.dtype
     precision = torch.float64 if double else torch.float32
     try:
-        L, V = torch.linalg.eigh(matrix.type(precision))
+        mat = matrix.type(precision) + matrix_eps*torch.eye(matrix.size()[0], device=matrix.device)
+        L, V = torch.linalg.eigh(mat)
     except Exception as err:
         if not matrix.isfinite().all():
             print('matrix', matrix)
         raise err
-    L = torch.maximum(L, torch.zeros(1, device=L.device)) + eps
+    L = torch.maximum(L, eig_eps * torch.ones(1, device=L.device))
     return ((V * L.pow(power)) @ V.T).type(orig_type)

@@ -76,7 +76,8 @@ class KrADPreconditioner(Preconditioner):
 
                 ggtl = ggt.mm(stat.type_as(ggt).T)
 
-                t_k = -(1 + mf.matrices_norm(ggtl, 'tr'))
+                #t_k = -(1 + mf.matrices_norm(ggtl, 'tr'))
+                t_k = -(1 + mf.matrices_norm(ggtl, 'tr')) * stat.size()[0]
                 ggtl.mul_(1/t_k)
                 lggtl = stat.type_as(ggtl).mm(ggtl)
                 self.statistics[j*rank + i].add_(lggtl)
@@ -101,8 +102,8 @@ class KrADPreconditioner(Preconditioner):
                     if self._hps.bf16:
                         stat = stat.bfloat16()
                     precon = mf.matrix_power_svd(stat, 1 / exp, double=self._hps.double) if exp > 1 else stat
-                    if self._hps.bf16:
-                        precon = precon.double() if self._hps.double else precon.float()
+                    if self._hps.double:
+                        precon = precon.double()
                     self.preconditioners[i] = precon
                 except Exception as err:
                     if self.debug:
