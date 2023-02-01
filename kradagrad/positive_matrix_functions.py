@@ -1,4 +1,5 @@
 import sys
+from typing import Union, Iterable
 
 import numpy as np
 import torch
@@ -309,7 +310,11 @@ def matrix_sqrt_NS(A: torch.Tensor, iters: int=25, tol: float=1e-5, batched: boo
     return Y.type(orig_type)
 
 @torch.no_grad()
-def matrix_power_svd(matrix: torch.Tensor, power: float, double: bool=False, matrix_eps=1e-8, eig_eps=0, **unused) -> torch.Tensor:
+def matrix_power_svd(matrix: torch.Tensor, power: Union[float, Iterable[float]], double: bool=False, matrix_eps=1e-8, eig_eps=0, **unused) -> torch.Tensor:
+    if singleton := not(isinstance(power, Iterable) and len(power) > 0):
+        pows = [power]
+    else:
+        pows = power
     # Really, use hermitian eigenvalue decomposition
     if unused:
         print(f'warning, `matrix_power_svd` got unused keywords: {list(unused.keys())}')
@@ -323,4 +328,7 @@ def matrix_power_svd(matrix: torch.Tensor, power: float, double: bool=False, mat
             print('matrix', matrix)
         raise err
     L = torch.maximum(L, eig_eps * torch.ones(1, device=L.device))
-    return ((V * L.pow(power)) @ V.T).type(orig_type)
+    if singleton:
+        return ((V * L.pow(power)) @ V.T).type(orig_type)
+    else:
+        return tuple(((V * L.pow(pow)) @ V.T).type(orig_type) for pow in pows)

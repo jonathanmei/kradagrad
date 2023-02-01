@@ -275,6 +275,15 @@ def _merge_small_dims(shape_to_merge, max_dim):
     resulting_shape.append(product)
   return resulting_shape
 
+class IdentityPartitioner:
+  def __init__(self, var):
+    self.shape = tuple(var.shape)
+  def shapes_for_preconditioners(self):
+    return self.shape
+  def partition(self, grad):
+    return [grad]
+  def merge_partitions(self, grads_list):
+    return grads_list[0]
 
 class Preconditioner:
   """Compute statistics/shape from gradients for preconditioning."""
@@ -289,7 +298,10 @@ class Preconditioner:
           self._original_shape, hps.block_size)
 
     reshaped_var = torch.reshape(var.detach(), self._transformed_shape)
-    self._partitioner = BlockPartitioner(reshaped_var, hps)
+    if kwargs.get('partition', True):
+      self._partitioner = BlockPartitioner(reshaped_var, hps)
+    else:
+      self._partitioner = IdentityPartitioner(reshaped_var)
     shapes = self._partitioner.shapes_for_preconditioners()
     rank = len(self._transformed_shape)
     device = var.device

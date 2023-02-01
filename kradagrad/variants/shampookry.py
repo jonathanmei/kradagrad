@@ -73,6 +73,8 @@ class KradaKryPreconditioner(Preconditioner):
                     return torch.tensordot(tens1, tens2, [axes, axes])
                 def mul_i(mat, tens):
                     return torch.tensordot(mat, tens, [[1], [i]]).moveaxis(0, i)
+                # ordinary krylov doesn't work so well
+                # we may need rational krylov instead, probably with zolotarev/chebyshev approx to x^(1/p)
                 ### Krylov subspace method to find f(A+bb^T) - f(A) for Positive Definite A
                 ## QR decomp to build basis
                 # Ref: Alg 1 in https://arxiv.org/pdf/2008.11501.pdf

@@ -166,12 +166,14 @@ def _skew(A):
 def _symm2(A):
     return A + A.T
 
-## lr- greedy
+## low rank greedy riccati solver
 # ref 1) https://www-user.tu-chemnitz.de/~benner/pub/blp-nlaa.pdf
 # ref 2) https://sma.epfl.ch/~anchpcommon/publications/truncatedlr.pdf
 
 # Alg 1 from [2]
-def lyap_kron_greedy(A: Kron, C: torch.Tensor, rank=None, U: Kron=None, S: torch.Tensor=None, max_it=4, tol=1e-1, skip_cost_check=True):
+# Note: >4 iterations seems to diverge
+@torch.no_grad()
+def lyap_kron_greedy(A: Kron, C: torch.Tensor, rank=None, U: Kron=None, S: torch.Tensor=None, max_it=4):
     """
     Given positive definite A (optionally its eigendecomp U S U^T), solves
         A X + X A = C C^T
@@ -190,14 +192,6 @@ def lyap_kron_greedy(A: Kron, C: torch.Tensor, rank=None, U: Kron=None, S: torch
         err_old = torch.inf
         z = torch.randn(C.shape[-2], 1, device=C.device, dtype=C.dtype)
         z = z - Q @ (Q.T @ z)
-        def cost(z):
-            L = torch.cat([C, C_neg0, C_neg1, A @ z, z], -1)
-            _, Lr = torch.linalg.qr(L)
-            Lc, Lcn0, Lcn1, LAz, Lz = torch.split(Lr, [
-                x.shape[-1] for x in [C, C_neg0, C_neg1, z, z]
-            ], dim=-1)
-            mat = -Lc @ Lc.T + _symm2(Lcn0 @ Lcn1.T) + _symm2(LAz @ Lz.T)
-            return (mat ** 2).sum()
         for i_ in range(max_it):
             z_norm = mf.matrices_norm(z, 'fro') 
             z = z / (z_norm + 1e-8)
@@ -206,15 +200,6 @@ def lyap_kron_greedy(A: Kron, C: torch.Tensor, rank=None, U: Kron=None, S: torch
                 C @ (C.T @ z) - C_neg0 @ (C_neg1.T @ z)
             )))
             z_ = z_ / (torch.sqrt(mf.matrices_norm(z_, 'fro')) + 1e-8)
-            if not skip_cost_check:
-                err_new = cost(z_)
-                if err_new > err_old * 2:
-                    print(f"quit early after {i_} iters")
-                    # reuse old z:
-                    z = z * z_norm
-                    break
-                else:
-                    err_old = err_new
             z = z_
         Q, _ = torch.linalg.qr(torch.cat([Q, z], -1))
         Z = torch.cat([Z, z], -1)
@@ -222,14 +207,16 @@ def lyap_kron_greedy(A: Kron, C: torch.Tensor, rank=None, U: Kron=None, S: torch
         C_neg1 = torch.cat([C_neg1, A @ z, z], -1)
     return Z
 
-# couldn't get Galerkin projection to work...
-
 # Adding B B^T
-def lyap_kron_lr_greedy(A: Kron, B: torch.Tensor, C: torch.Tensor, rank=None, U: Kron=None, S: torch.Tensor=None, max_it=4, tol=1e-1, skip_cost_check=True):
+# Note: >4 iterations seems to diverge
+@torch.no_grad()
+def lyap_kron_lr_greedy(A: Kron, B: torch.Tensor, C: torch.Tensor, rank=None, U: Kron=None, S: torch.Tensor=None, max_it=4):
     """
     Given positive definite A (optionally its eigendecomp U S U^T), solves
         (A + B B^T) X + X (A + B B^T) = C C^T
-    for low rank X ~ Z Z^T using energy norm from [2]
+    for low rank X ~ Z Z^T using [2], which treats
+        f: X |--> (A+BB^T)X + X(A+BB^T)
+    as a linear operator that induces a norm to define a loss function
     """
     C_neg0 = torch.zeros_like(C)[..., :0]
     C_neg1 = torch.zeros_like(C_neg0)
@@ -242,21 +229,11 @@ def lyap_kron_lr_greedy(A: Kron, B: torch.Tensor, C: torch.Tensor, rank=None, U:
         S = S.as_vec()
     def mul_AB(z):
         return A @ z + B @ (B.T @ z)
-    err_old_outer = torch.inf
     for r_ in range(rank):
         z = torch.randn([C.shape[-2], 1], device=C.device, dtype=C.dtype)
         z = z - Q @ (Q.T @ z)
-        def cost(z):
-            L = torch.cat([C, C_neg0, C_neg1, mul_AB(z), z], -1)
-            _, Lr = torch.linalg.qr(L)
-            Lc, Lcn0, Lcn1, LAz, Lz = torch.split(Lr, [
-                x.shape[-1] for x in [C, C_neg0, C_neg1, z, z]
-            ], dim=-1)
-            mat = -Lc @ Lc.T + _symm2(Lcn0 @ Lcn1.T) + _symm2(LAz @ Lz.T)
-            return (mat ** 2).sum()
         def mul_CCt(z):
             return C @ (C.T @ z) - C_neg0 @ (C_neg1.T @ z)
-        err_old_inner = torch.inf
         for i_ in range(max_it):
             z_norm = mf.matrices_norm(z, 'fro') 
             z = z / (z_norm + 1e-8)
@@ -269,48 +246,34 @@ def lyap_kron_lr_greedy(A: Kron, B: torch.Tensor, C: torch.Tensor, rank=None, U:
             )))
             z_ = ApIinvCCtz - woodbury @ ApIinvCCtz
             z_ = z_ / (torch.sqrt(mf.matrices_norm(z_, 'fro')) + 1e-8)
-            if not skip_cost_check:
-                err_new_inner = cost(z_)
-                if err_new_inner > err_old_inner * 2:
-                    print(f"quit early after {i_} iters")
-                    # reuse old z:
-                    z = z * z_norm
-                    break
-                else:
-                    err_old_inner = err_new_inner
             z = z_
-        if not skip_cost_check:
-            err_new_outer = cost(z)
-            # check if this loss is decreasing
-            if err_new_outer > err_old_outer:
-                print(f'rank increase to {r_ + 1} hurts, quitting')
-                return Z
-            err_old_outer = err_new_outer
-        #Q, _ = torch.linalg.qr(torch.cat([Q, z], -1))
-        Q, _ = torch.linalg.qr(torch.cat([Q, z - Q @ (Q.T @ z)], -1))
-        #Q = torch.cat([Q, z - Q @ (Q.T @ z)], -1) 
+        Q, _ = torch.linalg.qr(torch.cat([Q, z], -1))
 
         Z = torch.cat([Z, z], -1)
         C_neg0 = torch.cat([C_neg0, z, mul_AB(z)], -1)
         C_neg1 = torch.cat([C_neg1, mul_AB(z), z], -1)
     return Z
 
-
 # Alg 5 from [1]
-def lr_greedy_nm(A: Kron, C: torch.Tensor, rank: int=10, Z0: torch.Tensor=None):
+@torch.no_grad()
+def lr_greedy_nm(A: Kron, C: torch.Tensor, rank: int=10, Z0: torch.Tensor=None, max_it: int=4):
     """
-    solves
+    solves riccati equation with symmetric A
         C C^T - A^T X - X A - X^2 = 0
-    outputting low rank Z s.t. X = Z Z^T
+    outputting low rank Z s.t. X = Z Z^T using newton's method,
+    which solves a low-rank lyapunov equation in each iteration:
+        F Y + Y F = G G^T
+    where F = A + Z Z^T and G = [C, Z L]
+        and L = cholesky(Z^T Z) (or any other factorization/sqrt)
 
-    ours <= paper's
-    A <= -A
-    B <= I
-    C <= C^T
-    Q <= I
-    R <= I
+    tweaks in notation from [1]:
+        paper <= ours
+        A <= -A
+        B <= I
+        C <= C^T
+        Q <= I
+        R <= I
     """
-    #F = A - Z0 @ Z0.T
     if Z0 is None:
         Z0 = torch.zeros_like(C)[..., :0]
     Z = Z0
@@ -325,8 +288,38 @@ def lr_greedy_nm(A: Kron, C: torch.Tensor, rank: int=10, Z0: torch.Tensor=None):
             G = torch.cat([C, Z @ LZ.T], -1)
         else:
             G = C
-        Z = lyap_kron_lr_greedy(A, Z, G, rank=None if ii < loops-1 else rank, S=S, U=U)
+        Z = lyap_kron_lr_greedy(A, Z, G, rank=None if ii < loops-1 else rank, S=S, U=U, max_it=max_it)
     return Z
+
+# Refine existing solution using Riemannian 2nd order optimization
+#  Rather slow if initialized randomly but converges very quickly near optimum
+import pymanopt
+def ricatti_riemann_refinement(A: Kron, C: torch.Tensor, Z0=None, outer_iter=2, inner_iter=20):
+    n, k = Z0.shape[-2:]
+    mani = pymanopt.manifolds.PSDFixedRank(n, k)
+    @pymanopt.function.pytorch(mani)
+    def cost(Y):
+        if isinstance(Y, np.ndarray):
+            Y = torch.Tensor(Y)
+        YtY = Y.T @ Y
+        AY = A @ Y
+        s, k = [x.size()[-1] for x in [C, Y]]
+        L = torch.cat([C, AY, Y], -1)
+        _, Lr = torch.linalg.qr(L, 'reduced')    
+        Lc, LAy, Ly = torch.split(Lr, [s, k, k], dim=-1)
+        Mat1 = -Lc @ Lc.T + _symm2(LAy @ Ly.T) + Ly @ YtY @ Ly.T
+        return (Mat1 ** 2).sum() / 4
+    prob = pymanopt.Problem(mani, cost)
+    truster = pymanopt.optimizers.trust_regions.TrustRegions(max_iterations=outer_iter, verbosity=0, log_verbosity=0)
+    opt_result = truster.run(prob, initial_point=Z0.numpy(), maxinner=inner_iter)
+    return torch.Tensor(opt_result.point)
+
+# Combine everything! Fast greedy to initialize and Riemannian Newton to refine
+def riccati_kron_solve(A: Kron, C: torch.Tensor, rank: int=10, greedy_iter: int=4, refine_outer_iter: int=2, refine_inner_iter: int=20):
+    Z = lr_greedy_nm(A, C, rank=rank, max_it=greedy_iter)
+    Z = ricatti_riemann_refinement(A, C, Z0=Z, outer_iter=refine_outer_iter, inner_iter=refine_inner_iter)
+    return Z
+
 
 
 ## Riemannian (torch): slow; use base FixedRankPSD instead. Still slow, but manageable.
