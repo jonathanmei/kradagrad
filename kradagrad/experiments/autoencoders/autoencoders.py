@@ -11,6 +11,8 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.utils.tensorboard import SummaryWriter
 
+from datasets import CURVESDataset, FACESDataset
+
 sys.path.insert(0, os.path.expanduser("~/experiments"))
 
 from kradagrad.utils import get_optimizer
@@ -92,23 +94,12 @@ def get_task_cfg(dataset):
 
 def get_dataloaders(dataset, batch_size=100):
     if dataset == "mnist":
-        train_val_set = torchvision.datasets.MNIST(
+        train_set = torchvision.datasets.MNIST(
             root="./data",
             train=True,
             download=True,
             transform=transforms.ToTensor(),
         )
-
-        train_set, val_set = torch.utils.data.random_split(
-            train_val_set, [50000, 10000]
-        )
-        train_loader = torch.utils.data.DataLoader(
-            train_set, batch_size=batch_size, shuffle=True, num_workers=2
-        )
-        val_loader = torch.utils.data.DataLoader(
-            val_set, batch_size=batch_size, shuffle=False, num_workers=2
-        )
-
         test_set = torchvision.datasets.MNIST(
             root="./data",
             train=False,
@@ -116,17 +107,31 @@ def get_dataloaders(dataset, batch_size=100):
             transform=transforms.ToTensor(),
         )
 
-        test_loader = torch.utils.data.DataLoader(
-            test_set, batch_size=batch_size, shuffle=False, num_workers=2
-        )
-        return train_loader, val_loader, test_loader
-
     elif dataset == "faces":
-        raise NotImplementedError()
+        train_set = FACESDataset(root="./data")
+        train_set, test_set = torch.utils.data.random_split(train_set, [155600, 10000])
+
     elif dataset == "curves":
-        raise NotImplementedError()
+        train_set = CURVESDataset(
+            root="./data",
+            train=True,
+        )
+
+        test_set = CURVESDataset(
+            root="./data",
+            train=False,
+        )
     else:
         raise ValueError(f"Dataset {dataset} is not supported")
+
+    train_loader = torch.utils.data.DataLoader(
+        train_set, batch_size=batch_size, shuffle=True, num_workers=2
+    )
+    test_loader = torch.utils.data.DataLoader(
+        test_set, batch_size=batch_size, shuffle=False, num_workers=2
+    )
+
+    return train_loader, test_loader
 
 
 def main(tune_cfg, args):
@@ -140,8 +145,9 @@ def main(tune_cfg, args):
         act_fn=cfg.act_fn,
         out_fn=cfg.out_fn,
     )
+    net.cuda()
 
-    train_loader, val_loader, test_loader = get_dataloaders(args.dataset)
+    train_loader, test_loader = get_dataloaders(args.dataset)
 
     optimizer = get_optimizer(
         net.parameters(),
@@ -151,7 +157,7 @@ def main(tune_cfg, args):
     )
 
     if args.from_ckpt:
-        checkpoint = torch.load("model.pt")
+        checkpoint = torch.load("best_model.pt")
         net.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         epoch_init = checkpoint["epoch"]
@@ -163,21 +169,25 @@ def main(tune_cfg, args):
     best_epoch = 0
     best_val = 1000
     for epoch in range(epoch_init, args.epochs):
-        for i, data in enumerate(train_loader, 0):
-            inputs, labels = data
+        for i, batch in enumerate(train_loader, 0):
+            if isinstance(batch, list):
+                inputs, _ = batch
+            else:
+                inputs = batch
+            inputs = inputs.float().cuda()
 
             inputs = nn.Flatten()(inputs)
 
             optimizer.zero_grad()
 
             outputs = net(inputs)
-            loss = cfg.loss_fn(outputs, labels)
+            loss = cfg.loss_fn(outputs, inputs)
             loss.backward()
             optimizer.step()
 
             # print statistics
             running_loss += loss.item()
-            if train_steps % args.status_freq - 1 == 0:  # print every n mini-batches
+            if train_steps % args.status_freq == 0:  # print every n mini-batches
                 avg_loss = running_loss / args.status_freq
                 print("[%d, %5d] loss: %.3f" % (epoch + 1, i + 1, avg_loss))
                 writer.add_scalar("Loss/train", avg_loss, train_steps)
@@ -187,11 +197,15 @@ def main(tune_cfg, args):
 
         print("Evaluating...")
         running_val = 0
-        for i, data in enumerate(val_loader, 0):
-            inputs, labels = data
+        for i, batch in enumerate(test_loader, 0):
+            if isinstance(batch, list):
+                inputs, _ = batch
+            else:
+                inputs = batch
+            inputs = inputs.float().cuda()
             inputs = nn.Flatten()(inputs)
             outputs = net(inputs)
-            loss = cfg.loss_fn(outputs, labels)
+            loss = cfg.loss_fn(outputs, inputs)
             running_val += loss.item()
         val_loss = running_val / (i + 1)
         print(f"Epoch {epoch+1}, val loss: {val_loss}")
@@ -207,8 +221,33 @@ def main(tune_cfg, args):
                     "optimizer_state_dict": optimizer.state_dict(),
                     "loss": best_val,
                 },
-                "model.pt",
+                "best_model.pt",
             )
+
+    print("Reevaluating best model...")
+    checkpoint = torch.load("best_model.pt")
+    net.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    best_epoch = checkpoint["epoch"]
+    val_loss = checkpoint["loss"]
+
+    running_loss = 0
+    for i, batch in enumerate(test_loader, 0):
+        if isinstance(batch, list):
+            inputs, _ = batch
+        else:
+            inputs = batch
+        inputs = inputs.float().cuda()
+        inputs = nn.Flatten()(inputs)
+        outputs = net(inputs)
+        loss = cfg.loss_fn(outputs, inputs)
+        running_loss += loss.item()
+
+    test_loss = running_loss / (i + 1)
+    print(f"Best Epoch {epoch+1}, Val Loss: {val_loss}, Best Val Loss: {test_loss}")
+    writer.add_scalar("Loss/BestVal", test_loss, best_epoch)
+
+    writer.flush()
 
 
 def get_args():
@@ -225,5 +264,5 @@ def get_args():
 
 if __name__ == "__main__":
     args = get_args()
-    tune_cfg = {"optimizer": "krad", "lr": 0.001}
+    tune_cfg = {"optimizer": "adam", "lr": 0.001}
     main(tune_cfg, args)
