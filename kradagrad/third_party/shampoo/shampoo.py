@@ -93,7 +93,10 @@ class ShampooHyperParams:
   kradapoo_type: int = 1
   replace_preconditioner_steps: int = 1
   kry_qr: int = 0
+  # how many low-rank components to keep?
   low_rank: int = 25
+  # increment of low-rank inner loop. higher is faster but less accurate
+  rank_inc: int = 2
 
 
 class Graft:
@@ -279,11 +282,13 @@ class IdentityPartitioner:
   def __init__(self, var):
     self.shape = tuple(var.shape)
   def shapes_for_preconditioners(self):
-    return self.shape
+    return [[s,s] for s in self.shape]
   def partition(self, grad):
     return [grad]
   def merge_partitions(self, grads_list):
     return grads_list[0]
+  def num_splits(self):
+    return 1
 
 class Preconditioner:
   """Compute statistics/shape from gradients for preconditioning."""

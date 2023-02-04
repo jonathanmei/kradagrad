@@ -81,6 +81,7 @@ class KradaKryPreconditioner(Preconditioner):
                 u_v = [0] * kry
                 u_v[0] = grad 
                 for kk in range(1, kry):
+                    # TODO: rational krylov instead
                     u_v[kk] = mul_i(stat, u_v[kk-1])
                 u_v = torch.stack([u_.ravel() for u_ in u_v], -1)
                 u_v, _ = torch.linalg.qr(u_v)
