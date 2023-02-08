@@ -1,14 +1,17 @@
 ## Simple Kradagrad-- that extends official unoptimized Shampoo implementation
 
 import math
+<<<<<<< HEAD
 from collections import defaultdict
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
+=======
+>>>>>>> kradagrad-dev
 
 import torch
-from torch.optim.optimizer import Optimizer
 
 from . import positive_matrix_functions as mf
 from .third_party.shampoo import (
+<<<<<<< HEAD
     GRAFT,
     MOMENTUM,
     PRECONDITIONER,
@@ -20,6 +23,10 @@ from .third_party.shampoo import (
     Preconditioner,
     SGDGraft,
     Shampoo,
+=======
+    Shampoo, Preconditioner,
+    MOMENTUM, PRECONDITIONER,
+>>>>>>> kradagrad-dev
 )
 
 
@@ -73,7 +80,16 @@ class KrADmmPreconditioner(Preconditioner):
             stat = self.statistics[j * rank + i]
             precon = self.preconditioners[j * rank + i]
             if w1 < 1:
+<<<<<<< HEAD
                 stat.mul_(1 / w1)
+=======
+                stat.mul_(1/w1)
+                
+            if self._hps.double:
+                precon_grad_ = precon_grad_.double()
+            if self._hps.bf16:
+                precon_grad_ = precon_grad_.bfloat16()
+>>>>>>> kradagrad-dev
 
             grgt = torch.tensordot(precon_grad_, precon_grad_, [axes, axes])
             if self.debug and not grgt.isfinite().all():
@@ -112,12 +128,18 @@ class KrADmmPreconditioner(Preconditioner):
                     )
                     raise ValueError("damping broke")
                 stat = stat_prime
-            lgrgt = stat.mm(grgt)
+            lgrgt = stat.type_as(grgt).mm(grgt)
 
             # damping
+<<<<<<< HEAD
             t_k = -(1 + mf.matrices_norm(lgrgt, "fro"))
             lgrgt.mul_(1 / t_k)
             DX = lgrgt.mm(stat.T)
+=======
+            t_k = - (1 + mf.matrices_norm(lgrgt, 'fro'))
+            lgrgt.mul_(1/t_k)
+            DX = lgrgt.mm(stat.T.type_as(lgrgt))
+>>>>>>> kradagrad-dev
             if self.debug and not DX.isfinite().all():
                 print("DX", DX, "\nlgrgt", lgrgt)
                 raise ValueError("DX broke")
@@ -196,7 +218,7 @@ class KrADmmPreconditioner(Preconditioner):
             preconditioners_for_grad = mats[i * num_splits : (i + 1) * num_splits]
             rank = len(grad.shape)
             orig_type = grad.type()
-            precond_grad = grad.type(torch.float32)
+            precond_grad = grad.type(torch.float64 if self._hps.double else torch.float32)
 
             preconditioner = preconditioners_for_grad[ix]
             precond_grad = torch.tensordot(precond_grad, preconditioner, [[ix], [0]])

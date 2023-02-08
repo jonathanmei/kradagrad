@@ -83,10 +83,17 @@ class ShampooHyperParams:
   graft_type: int = LayerwiseGrafting.SGD
   # Nesterov momentum
   nesterov: bool = True
-  # Use fp64? otherwise fp32
+  # Use fp64? Overrides `bf16`. otherwise fp32
   double: bool = False
+  # Use bf16 for stat updates and applying preconditioner? Overridden by `double`. otherwise fp32
+  bf16: bool = False
   # Use iterative methods for matrix roots? o/w eigh
   iterative_matrix_roots: bool = False
+  #Kradapoo only:
+  kradapoo_type: int = 1
+  replace_preconditioner_steps: int = 1
+  kry_qr: int = 0
+  low_rank: int = 25
 
 
 class Graft:
@@ -268,6 +275,15 @@ def _merge_small_dims(shape_to_merge, max_dim):
     resulting_shape.append(product)
   return resulting_shape
 
+class IdentityPartitioner:
+  def __init__(self, var):
+    self.shape = tuple(var.shape)
+  def shapes_for_preconditioners(self):
+    return self.shape
+  def partition(self, grad):
+    return [grad]
+  def merge_partitions(self, grads_list):
+    return grads_list[0]
 
 class Preconditioner:
   """Compute statistics/shape from gradients for preconditioning."""
@@ -282,17 +298,21 @@ class Preconditioner:
           self._original_shape, hps.block_size)
 
     reshaped_var = torch.reshape(var.detach(), self._transformed_shape)
-    self._partitioner = BlockPartitioner(reshaped_var, hps)
+    if kwargs.get('partition', True):
+      self._partitioner = BlockPartitioner(reshaped_var, hps)
+    else:
+      self._partitioner = IdentityPartitioner(reshaped_var)
     shapes = self._partitioner.shapes_for_preconditioners()
     rank = len(self._transformed_shape)
     device = var.device
-    if rank <= 1:
+    if rank < 1:
       self.statistics = []
       self.preconditioners = []
     else:
       eps = hps.matrix_eps if eps_override is None else eps_override
-      self.statistics = [eps * torch.eye(s[0], device=device).type(torch.float32) for s in shapes]
-      self.preconditioners = [torch.eye(s[0], device=device).type(torch.float32) for s in shapes]
+      precision = torch.float64 if hps.double else torch.float32
+      self.statistics = [eps * torch.eye(s[0], device=device, dtype=precision) for s in shapes]
+      self.preconditioners = [torch.eye(s[0], device=device, dtype=precision) for s in shapes]
 
   @torch.no_grad()
   def add_statistics(self, grad):
@@ -309,6 +329,10 @@ class Preconditioner:
     reshaped_grad = torch.reshape(grad.detach(), self._transformed_shape)
     partitioned_grads = self._partitioner.partition(reshaped_grad)
     for j, grad in enumerate(partitioned_grads):
+      if self._hps.double:
+          grad = grad.double()
+      if self._hps.bf16:
+          grad = grad.bfloat16()
       for i in range(rank):
         axes = list(range(i)) + list(range(i + 1, rank))
         stat = torch.tensordot(grad, grad, [axes, axes])
@@ -332,7 +356,7 @@ class Preconditioner:
       if self._hps.iterative_matrix_roots:
         self.preconditioners[i] = matrix_functions.ComputePower(stat, exp, ridge_epsilon=eps, double=self._hps.double)
       else:
-        self.preconditioners[i] = mf.matrix_power_svd(stat, -1/exp, double=self._hps.double, eps=eps)
+        self.preconditioners[i] = mf.matrix_power_svd(stat, -1/exp, double=self._hps.double, eig_eps=eps)
 
 
   @torch.no_grad()
@@ -358,13 +382,16 @@ class Preconditioner:
       preconditioners_for_grad = mats[i * num_splits:(i + 1) * num_splits]
       rank = len(grad.shape)
       orig_type = grad.type()
-      precond_grad = grad.type(torch.float32)
+      precision = (torch.float64 if self._hps.double else
+                   torch.bfloat16 if self._hps.bf16 else
+                   torch.float32)
+      precond_grad = grad.type(precision)
       for j in range(rank):
         preconditioner = preconditioners_for_grad[j]
         if j in skip:
           pg_ = precond_grad.moveaxis(0, -1)
         else:
-          pg_ = torch.tensordot(precond_grad, preconditioner, [[0], [0]])
+          pg_ = torch.tensordot(precond_grad, preconditioner.type(precision), [[0], [0]])
         if 'debug' in self.__dict__ and self.debug and not precond_grad.isfinite().all():
           print(i, j, 'precon', preconditioner, '\nprecond_grad (before)', precond_grad, '\nprecond_grad (after)', pg_)
           raise ValueError('precond_grad broke')
@@ -383,7 +410,6 @@ MOMENTUM = 'momentum'
 PRECONDITIONER = 'preconditioner'
 GRAFT = 'graft'
 
-
 class Shampoo(optim.Optimizer):
   """The Shampoo optimizer."""
   def __init__(self,
@@ -396,8 +422,8 @@ class Shampoo(optim.Optimizer):
     self.hps = hyperparams
     # allow overriding hyperparameters via kwargs:
     for k_, v_ in kwargs.items():
-        if k_ in self.hps.__dict__:
-            self.hps.__setattr__(k_, v_)
+      if k_ in self.hps.__dict__:
+          self.hps.__setattr__(k_, v_)
     super().__init__(params, defaults)
 
   @torch.no_grad()
@@ -414,7 +440,6 @@ class Shampoo(optim.Optimizer):
     else:
       state[GRAFT] = Graft(self.hps, var)
 
-  @torch.no_grad()
   def step(self, closure=None):
     hps = self.hps
     for group in self.param_groups:
@@ -437,11 +462,7 @@ class Shampoo(optim.Optimizer):
         graft.add_statistics(grad)
         
         if state[STEP] % hps.statistics_compute_steps == 0:
-          try:
-            preconditioner.add_statistics(grad)
-          except ValueError as err:
-            print('param', p)
-            raise err
+          preconditioner.add_statistics(grad)
         if state[STEP] % hps.preconditioning_compute_steps == 0:
           preconditioner.compute_preconditioners()
 
