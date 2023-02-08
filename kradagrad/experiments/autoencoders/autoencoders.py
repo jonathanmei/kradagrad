@@ -1,14 +1,21 @@
 import argparse
 import os
 import sys
+import time
+from functools import partial
 from typing import Callable, List, NamedTuple, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
+from ray import air, tune
+from ray.air import session
+from ray.air.checkpoint import Checkpoint
+from ray.tune.schedulers import ASHAScheduler
 from torch.utils.tensorboard import SummaryWriter
 
 from datasets import CURVESDataset, FACESDataset
@@ -92,33 +99,38 @@ def get_task_cfg(dataset):
         raise ValueError(f"Dataset {dataset} is not supported")
 
 
-def get_dataloaders(dataset, batch_size=100):
+def get_dataloaders(dataset, batch_size=100, root=None):
     if dataset == "mnist":
         train_set = torchvision.datasets.MNIST(
-            root="./data",
+            root=root or "./data",
             train=True,
             download=True,
             transform=transforms.ToTensor(),
         )
         test_set = torchvision.datasets.MNIST(
-            root="./data",
+            root=root or "./data",
             train=False,
             download=True,
             transform=transforms.ToTensor(),
         )
 
     elif dataset == "faces":
-        train_set = FACESDataset(root="./data")
-        train_set, test_set = torch.utils.data.random_split(train_set, [155600, 10000])
+        train_set = FACESDataset(
+            root=root or "./data",
+            transform=transforms.Compose(
+                [transforms.ToTensor(), transforms.Normalize(mean=0.0, std=1.0)]
+            ),
+        )
+        train_set, test_set = torch.utils.data.random_split(train_set, [103500, 62100])
 
     elif dataset == "curves":
         train_set = CURVESDataset(
-            root="./data",
+            root=root or "./data",
             train=True,
         )
 
         test_set = CURVESDataset(
-            root="./data",
+            root=root or "./data",
             train=False,
         )
     else:
@@ -139,6 +151,11 @@ def main(tune_cfg, args):
 
     writer = SummaryWriter(log_dir="tb")
 
+    seed = tune_cfg["seed"]
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
     net = DenseNet(
         encoder_widths=cfg.encoder_widths,
         decoder_widths=cfg.decoder_widths,
@@ -147,13 +164,19 @@ def main(tune_cfg, args):
     )
     net.cuda()
 
-    train_loader, test_loader = get_dataloaders(args.dataset)
+    train_loader, test_loader = get_dataloaders(
+        args.dataset, batch_size=100, root="/home/luke.walters/data"
+    )
+    flatten = nn.Flatten()
 
     optimizer = get_optimizer(
         net.parameters(),
         optimizer=tune_cfg["optimizer"],
         lr=tune_cfg["lr"],
-        block_size=100,
+        block_size=args.block_size,
+        weight_decay=5e-6,
+        double=True if tune_cfg["optimizer"] == "shampoo" else False,
+        eps=tune_cfg["eps"],
     )
 
     if args.from_ckpt:
@@ -167,29 +190,40 @@ def main(tune_cfg, args):
     running_loss = 0
     train_steps = 0
     best_epoch = 0
-    best_val = 1000
+    best_val = 100000
+
     for epoch in range(epoch_init, args.epochs):
         for i, batch in enumerate(train_loader, 0):
             if isinstance(batch, list):
                 inputs, _ = batch
             else:
                 inputs = batch
-            inputs = inputs.float().cuda()
 
-            inputs = nn.Flatten()(inputs)
+            if args.show_iter_time:
+                start_time = time.time()
+
+            inputs = inputs.float().cuda()
+            inputs = flatten(inputs)
 
             optimizer.zero_grad()
 
             outputs = net(inputs)
             loss = cfg.loss_fn(outputs, inputs)
+            if torch.isnan(loss):
+                session.report({"done": True})
+
             loss.backward()
             optimizer.step()
+
+            if args.show_iter_time:
+                print(f"batch {i}, step time: {time.time()-start_time} sec")
 
             # print statistics
             running_loss += loss.item()
             if train_steps % args.status_freq == 0:  # print every n mini-batches
                 avg_loss = running_loss / args.status_freq
                 print("[%d, %5d] loss: %.3f" % (epoch + 1, i + 1, avg_loss))
+
                 writer.add_scalar("Loss/train", avg_loss, train_steps)
                 running_loss = 0.0
 
@@ -210,6 +244,8 @@ def main(tune_cfg, args):
         val_loss = running_val / (i + 1)
         print(f"Epoch {epoch+1}, val loss: {val_loss}")
         writer.add_scalar("Loss/val", val_loss, train_steps)
+
+        session.report({"val_loss": val_loss})
 
         if val_loss < best_val:
             best_epoch = epoch
@@ -255,14 +291,69 @@ def get_args():
     parser.add_argument(
         "--dataset", type=str, required=True, choices=["mnist", "faces", "curves"]
     )
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        required=True,
+        choices=["sgd", "adam", "shampoo", "krad", "kradmm"],
+    )
     parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--block_size", type=int, default=100)
     parser.add_argument("--status_freq", type=int, default=100)
     parser.add_argument("--from_ckpt", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--show_iter_time", action="store_true")
 
     return parser.parse_args()
 
 
+def get_eps_sweep(opt):
+    if opt in ["kradmm", "shampoo", "krad"]:
+        return [1e-4, 1e-3, 1e-2, 1e-1, 1]
+    elif opt == "adam":
+        return [1e-10, 1e-8, 1e-6, 1e-4, 1e-3, 1e-2, 1e-1]
+    else:
+        return [1e-8]
+
+
 if __name__ == "__main__":
     args = get_args()
-    tune_cfg = {"optimizer": "adam", "lr": 0.001}
-    main(tune_cfg, args)
+
+    if not args.debug:
+        trainable = partial(main, args=args)
+
+        trainer = tune.with_resources(
+            tune.with_parameters(trainable), resources={"cpu": 2, "gpu": 1.0 / 10.0}
+        )
+
+        grace_periods = {"mnist": 20, "faces": 20, "curves": 25}
+
+        tune_config = tune.TuneConfig(
+            num_samples=1,
+            scheduler=ASHAScheduler(
+                max_t=args.epochs,
+                grace_period=grace_periods[args.dataset],
+                metric="val_loss",
+                mode="min",
+            ),
+        )
+
+        opt = args.optimizer
+        param_space = {
+            "optimizer": tune.grid_search([opt]),
+            "lr": tune.grid_search(
+                [1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 3e-1, 1, 3, 10]
+            ),
+            "seed": tune.grid_search([100]),
+            "eps": tune.grid_search(get_eps_sweep(opt)),
+        }
+        tuner = tune.Tuner(
+            trainer,
+            param_space=param_space,
+            tune_config=tune_config,
+            run_config=air.RunConfig(name=f"sweep_{opt}_{args.dataset}"),
+        )
+        tuner.fit()
+    else:
+        tune_cfg = {"optimizer": "shampoo", "lr": 0.001, "seed": 100, "eps": 1e-6}
+        main(tune_cfg, args)

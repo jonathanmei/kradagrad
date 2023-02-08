@@ -33,7 +33,7 @@ class FACESDataset(Dataset):
 
         print("Loading dataset...")
         data = scipy.io.loadmat(local_mat_path)
-        self.data = data["newfaces_single"].T
+        self.data = data["newfaces_single"].T.reshape([-1, 25, 25])
 
         self.transform = transform
 

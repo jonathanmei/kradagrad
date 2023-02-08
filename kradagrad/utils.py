@@ -52,6 +52,6 @@ def get_optimizer(
             params, lr, weight_decay=weight_decay, momentum=momentum
         )
     elif optimizer == "adam":
-        optimizer = torch.optim.Adam(params, lr, weight_decay=weight_decay, eps=eps)
+        optimizer = torch.optim.AdamW(params, lr, weight_decay=weight_decay, eps=eps)
 
     return optimizer
