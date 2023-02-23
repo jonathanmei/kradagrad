@@ -20,7 +20,6 @@ def convert_tb_data(root_dir, sort_by=None):
     """
     import os
 
-  
     import pandas as pd
     from tensorflow.python.summary.summary_iterator import summary_iterator
 
@@ -42,18 +41,20 @@ def convert_tb_data(root_dir, sort_by=None):
         )
 
     columns_order = ["wall_time", "name", "step", "value", "root"]
-    
-    import ipdb; ipdb.set_trace()
 
     out = []
-    for (root, _, filenames) in os.walk(root_dir):
+    for root, _, filenames in os.walk(root_dir):
         for filename in filenames:
             if "events.out.tfevents" not in filename:
                 continue
-            file_full_path = os.path.join(root, filename)
-            df = convert_tfevent(file_full_path)
-            df["root"] = root
-            out.append(df)
+
+            try:
+                file_full_path = os.path.join(root, filename)
+                df = convert_tfevent(file_full_path)
+                df["root"] = root
+                out.append(df)
+            except:
+                print(f"Failed to read {file_full_path}")
 
     # Concatenate (and sort) all partial individual dataframes
     all_df = pd.concat(out)
