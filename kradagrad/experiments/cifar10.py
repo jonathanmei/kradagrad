@@ -48,22 +48,27 @@ def make_optimizer(params, args):
             weight_decay=args.weight_decay,
             eps=args.eps
         )
-    elif args.optimizer in ['shampoo', 'kradmm', 'krad']:
+    elif args.optimizer in ['shampoo', 'kradmm', 'krad', 'kradapoo']:
         hps = kradagrad.HyperParams(
             matrix_eps=args.eps,  weight_decay=args.weight_decay, graft_type=0, beta2=1,            
             block_size=args.block_size,
             best_effort_shape_interpretation=True,
             inverse_exponent_override=args.inverse_exponent_override,
+            double=args.double,
+            iterative_matrix_roots=args.mat_root,
+            bf16=args.bf16,
             #preconditioning_compute_steps=mu.roundup(50_000, args.batch_size),
             preconditioning_compute_steps=args.update_freq,
+            start_preconditioning_step=args.start_precon,
         )
         if args.optimizer == 'shampoo':
             optimizer = kradagrad.Shampoo(params, lr=args.lr, hyperparams=hps, momentum=args.momentum)
         elif args.optimizer == 'kradmm':
             optimizer = kradagrad.KradagradMM(params, lr=args.lr, hyperparams=hps, momentum=args.momentum, debug=args.debug)
         elif args.optimizer == 'krad':
-            optimizer = kradagrad.KradagradPP(params, lr=args.lr, momentum=args.momentum, hyperparams=hps,
-                                             tensor_batch_size=0)  # tensor batching only for single run
+            optimizer = kradagrad.KradagradPP(params, lr=args.lr, momentum=args.momentum, hyperparams=hps, debug=args.debug)
+        elif args.optimizer == 'kradapoo':
+            optimizer = kradagrad.Kradapoo(params, lr=args.lr, momentum=args.momentum, hyperparams=hps, debug=args.debug)
     else:
         raise ValueError('unknown optimizer: {}'.format(args.optimizer))
     return optimizer
@@ -187,7 +192,7 @@ def train_run(args):
         writer.add_scalar('prec1/train', prec1_tr, epoch)
         writer.add_scalar('prec1/val', prec1_va, epoch)
         
-        if args.optimizer in ['krad', 'kradmm', 'shampoo']:
+        if args.optimizer in ['krad', 'kradmm', 'shampoo', 'kradapoo'] and args.debug:
             precon_norms = {str(i): mf.matrices_norm(precon).cpu().numpy() for i, precon in enumerate([precon_ for group_ in optimizer.param_groups for param_ in group_['params'] for precon_ in optimizer.state[param_]['preconditioner'].preconditioners])}
             writer.add_scalars('norms/precon', precon_norms, epoch)
             stat_norms = {str(i): mf.matrices_norm(stat).cpu().numpy() for i, stat in enumerate([stat_ for group_ in optimizer.param_groups for param_ in group_['params'] for stat_ in optimizer.state[param_]['preconditioner'].statistics])}
@@ -228,7 +233,16 @@ def main(args):
     args.lr = float(args.lr_str)
     args.half = not args.not_half
 
-    args.save_dir = '{}_{}_ckpts'.format(args.arch, args.data)
+    arch_modifier = (
+        '_tf32' if args.tf32 else ''
+    ) + (
+        '_nohalf' if args.not_half else ''
+    )  + (
+        '_soft' if args.activation=='softplus' else ''
+    ) + (
+        '_no_batchnorm' if args.no_batch_norm else ''
+    )
+    args.save_dir = '{}_{}{}_ckpts'.format(args.data, args.arch, arch_modifier)
 
     args.opt_modifier_str = (
         '_eps{}_lr{}_batch{}'.format(
@@ -236,11 +250,8 @@ def main(args):
         )
     ) + (
         '_ONS' if args.inverse_exponent_override else ''
-    ) + (
-        '_tf32' if args.tf32 else ''
-    ) + (
-        '_soft' if args.activation=='softplus' else '_relu'
     )
+
 
     torch.cuda.set_device(args.device)
     
@@ -259,9 +270,10 @@ if __name__ == '__main__':
     parser.add_argument('--data', type=str, default='CIFAR10',
                         choices=['CIFAR10', 'CIFAR100'])
     parser.add_argument('--optimizer', type=str, default='sgd',
-                        choices=['sgd', 'ada', 'shampoo', 'kradmm', 'krad'])
+                        choices=['sgd', 'ada', 'shampoo', 'kradmm', 'krad', 'kradapoo'])
     parser.add_argument('--no_batch_norm', action='store_true')
 
+    parser.add_argument('--mat_root', action='store_true')
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--block_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=50)
@@ -269,10 +281,13 @@ if __name__ == '__main__':
     parser.add_argument('--weight_decay', type=float, default=0)
     parser.add_argument('--inverse_exponent_override', type=int, default=0)
     parser.add_argument('--update_freq', type=int, default=1)
+    parser.add_argument('--start_precon', type=int, default=1)
     parser.add_argument('--eps_str', type=str, default='1e-6')
     parser.add_argument('--lr_str', type=str, default='1e-1')
-    parser.add_argument('--not_half', action='store_true')  # not that harmful
+    parser.add_argument('--not_half', action='store_true')  # not that harmful timewise
+    parser.add_argument('--bf16', action='store_true')  # let's see if this works for krad!
     parser.add_argument('--tf32', action='store_true')  # not that helpful
+    parser.add_argument('--double', action='store_true')
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--activation', type=str, default='relu', choices=['relu', 'softplus'])
 
