@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 import time
@@ -146,6 +147,10 @@ def get_dataloaders(dataset, batch_size=100, root=None):
     return train_loader, test_loader
 
 
+STEP_THRESHOLDS = {"faces": 5000, "mnist": 3000, "curves": 5000}
+VAL_THRESHOLDS = {"faces": 0.3, "mnist": 600, "curves": 250}
+
+
 def main(tune_cfg, args):
     cfg = get_task_cfg(args.dataset)
 
@@ -175,8 +180,11 @@ def main(tune_cfg, args):
         lr=tune_cfg["lr"],
         block_size=args.block_size,
         weight_decay=5e-6,
-        double=True if tune_cfg["optimizer"] == "shampoo" else False,
+        double=True
+        if tune_cfg["optimizer"] == "shampoo" and not args.single
+        else False,
         eps=tune_cfg["eps"],
+        iterative_roots=args.iterative,
     )
 
     if args.from_ckpt:
@@ -209,8 +217,6 @@ def main(tune_cfg, args):
 
             outputs = net(inputs)
             loss = cfg.loss_fn(outputs, inputs)
-            if torch.isnan(loss):
-                session.report({"done": True})
 
             loss.backward()
             optimizer.step()
@@ -246,6 +252,11 @@ def main(tune_cfg, args):
         writer.add_scalar("Loss/val", val_loss, train_steps)
 
         session.report({"val_loss": val_loss})
+        # threshold stopping
+        # if (train_steps > STEP_THRESHOLDS[args.dataset]) and (
+        #     val_loss > VAL_THRESHOLDS[args.dataset]
+        # ):
+        #     session.report(done=True)
 
         if val_loss < best_val:
             best_epoch = epoch
@@ -303,6 +314,9 @@ def get_args():
     parser.add_argument("--from_ckpt", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--show_iter_time", action="store_true")
+    parser.add_argument("--tag", type=str, default=None)
+    parser.add_argument("--iterative", action="store_true")
+    parser.add_argument("--single", action="store_true")
 
     return parser.parse_args()
 
@@ -326,10 +340,49 @@ if __name__ == "__main__":
             tune.with_parameters(trainable), resources={"cpu": 2, "gpu": 1.0 / 10.0}
         )
 
-        grace_periods = {"mnist": 20, "faces": 20, "curves": 25}
+        grace_periods = {"mnist": 5, "faces": 5, "curves": 5}
+
+        opt = args.optimizer
+        lrs = [1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 3e-1, 1, 2]
+
+        eps = get_eps_sweep(opt)
+
+        # #### overrides for 2nd pass sweep#####
+
+        if opt in ["krad", "kradmm"] and args.dataset == "faces":
+            lrs = [0.05, 0.4]
+            eps = [0.0001, 0.001]
+            num_trials = 30
+
+        elif opt == "krad" and args.dataset == "mnist":
+            lrs = [0.0005, 0.005]
+            eps = [0.0001, 0.001]
+            num_trials = 30
+        elif opt == "kradmm" and args.dataset == "mnist":
+            lrs = [0.001, 0.01]
+            eps = [0.0001, 0.001]
+            num_trials = 30
+
+        elif opt in ["krad", "kradmm"] and args.dataset == "curves":
+            lrs = [1e-5, 0.05]
+            eps = [0.0001, 0.05]
+            num_trials = 60
+
+        elif opt == "sgd":
+            num_trials = 20
+
+        else:
+            num_trials = len(lrs) * len(eps)
+
+        with open("best_lrs.json") as f:
+            best_lrs = json.load(f)
+        with open("best_eps.json") as f:
+            best_eps = json.load(f)
+
+        ##### end overrides #####
 
         tune_config = tune.TuneConfig(
-            num_samples=1,
+            num_samples=num_trials,
             scheduler=ASHAScheduler(
                 max_t=args.epochs,
                 grace_period=grace_periods[args.dataset],
@@ -338,20 +391,22 @@ if __name__ == "__main__":
             ),
         )
 
-        opt = args.optimizer
         param_space = {
             "optimizer": tune.grid_search([opt]),
-            "lr": tune.grid_search(
-                [1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 3e-1, 1, 3, 10]
-            ),
+            "lr": tune.loguniform(np.min(lrs), np.max(lrs)),
             "seed": tune.grid_search([100]),
-            "eps": tune.grid_search(get_eps_sweep(opt)),
+            "eps": tune.loguniform(np.min(eps), np.max(eps)),
         }
+
+        exp_name = f"sweep_{opt}_{args.dataset}"
+        if args.tag is not None:
+            exp_name += f"_{args.tag}"
+
         tuner = tune.Tuner(
             trainer,
             param_space=param_space,
             tune_config=tune_config,
-            run_config=air.RunConfig(name=f"sweep_{opt}_{args.dataset}"),
+            run_config=air.RunConfig(name=exp_name),
         )
         tuner.fit()
     else:

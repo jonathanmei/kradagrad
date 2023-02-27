@@ -8,6 +8,7 @@ from torch.autograd import Variable
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
+
 # ======================================================================================================================
 def train_vae(epoch, args, train_loader, model, optimizer):
     # set loss to 0
@@ -31,7 +32,6 @@ def train_vae(epoch, args, train_loader, model, optimizer):
     from time import time
 
     for batch_idx, (data, target) in enumerate(train_loader):
-
         # start = time()
         # print(batch_idx)
         if args.cuda:

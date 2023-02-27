@@ -16,6 +16,7 @@ def get_optimizer(
     precon_update_freq=20,
     double=False,
     beta2=1,
+    iterative_roots=False,
 ):
     hps = kradagrad.HyperParams(
         matrix_eps=eps,
@@ -27,10 +28,11 @@ def get_optimizer(
         inverse_exponent_override=inverse_exponent_override,
         preconditioning_compute_steps=precon_update_freq,
         double=double,
+        iterative_matrix_roots=iterative_roots,
     )
     if optimizer == "shampoo":
         optimizer = kradagrad.Shampoo(params, lr=lr, hyperparams=hps, momentum=momentum)
-    elif optimizer == "kradmm":
+    elif optimizer == "krad":
         optimizer = kradagrad.KradagradMM(
             params,
             lr=lr,
@@ -38,7 +40,7 @@ def get_optimizer(
             momentum=momentum,
             debug=debug,
         )
-    elif optimizer == "krad":
+    elif optimizer == "krad*":
         optimizer = kradagrad.KradagradPP(
             params,
             lr=lr,

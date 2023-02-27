@@ -176,7 +176,6 @@ def train_gem_pmnist(config):
 
 
 if __name__ == "__main__":
-
     config_2ord = {
         "lr": tune.grid_search([1, 2.5e-1, 1e-1, 2.5e-2, 1e-2]),
         "optimizer": tune.grid_search(["shampoo", "krad", "kradmm"]),
