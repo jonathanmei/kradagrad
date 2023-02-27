@@ -245,11 +245,6 @@ class KradagradMM(Shampoo):
                     continue
                 grad = p.grad.detach()
                 state = self.state[p]
-                if "preconditioner" not in state.keys():
-                    import ipdb
-
-                    ipdb.set_trace()
-                    dumb = 1
                 prec = state[PRECONDITIONER]
 
                 # Compute stats and preconditioners
