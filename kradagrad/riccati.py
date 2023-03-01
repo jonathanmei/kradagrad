@@ -144,7 +144,7 @@ class KronDiag(Kron):
 
 def lyapunov_reg(A, C, lam=1e0, X0=None, eps=1e-8):
     """
-    Solves regularized symmetric Lyapunov problem
+    Solves dense regularized symmetric Lyapunov problem
         1/2 |A X + X A^T - C|_F^2 + lam |X - X0|_F^2
      => (A^2 + lam/2 I) X + X (A^2 + lam/2 I) + 2 A X A = A C + C A + lam X0
     A bit more robust than `lyapunov`, allowing a wider range of `lam`
@@ -155,7 +155,7 @@ def lyapunov_reg(A, C, lam=1e0, X0=None, eps=1e-8):
     S = torch.maximum(S, eps * torch.ones_like(S))
     AC = A @ C
     F = Uinv @ (_symm2(AC) + lam * X0).type_as(U) @ U
-    Slam = S ** 2 + lam/2 
+    Slam = S ** 2 + lam/2
     W = Slam[..., None] + Slam[..., None, :] + 2 * S[..., None] * S[..., None, :]
     Y = F / W
     X = U @ Y @ Uinv
@@ -163,7 +163,7 @@ def lyapunov_reg(A, C, lam=1e0, X0=None, eps=1e-8):
 
 def lyapunov(A, C, asymm=False, lam=1e0, X0=None, eps=1e-8):
     """
-    Solves regularized Lyapunov problem
+    Solves dense regularized Lyapunov problem
         A X + X A^T + lam X = C + lam X0
      => (A + lam/2 I) X + X (A^T + lam/2 I) = C + lam X0
     where A is assumed symmetric if `asymm` is False.
@@ -214,11 +214,10 @@ def kron_lyap_greedy(A: Kron, C: torch.Tensor, rank=None, U: Kron=None, S: torch
         S, U = A.eigh()
         S = S.as_vec()
     for r_ in range(rank):
-        err_old = torch.inf
         z = torch.randn(C.shape[-2], 1, device=C.device, dtype=C.dtype)
         z = z - Q @ (Q.T @ z)
         for i_ in range(max_it):
-            z_norm = mf.matrices_norm(z, 'fro') 
+            z_norm = torch.sqrt(z.T @ z)
             z = z / (z_norm + 1e-8)
             S_hat_inv = 1 / (S + z.T @ (A @ z))
             z_ = U @ (S_hat_inv * (U.T @ (
@@ -259,6 +258,7 @@ def kron_lyap_lr_greedy_energy(A: Kron, B: torch.Tensor, C: torch.Tensor, Z0: to
         return (z.T @ z) * (Az.T @ Az) + (z.T @ Az) ** 2 - 2 * (Az.T @ Cz)
 
     # First, make sure initialization is helpful
+    # Yes, this is useful (vs starting from scratch)
     cost_nothing = (C ** 2).sum()
     AZ = mul_AB(Z)
     keep_ix = tuple(cost_fro(Z[..., j:j+1], Az=AZ[..., j:j+1]) < cost_nothing for j in range(Z.shape[-1]))
@@ -389,7 +389,7 @@ def kron_riccati_riemann_refinement(A: Kron, C: torch.Tensor, Z0=None, max_it=10
         AY = A.cpu() @ Y
         s, k = [x.size()[-1] for x in [C, Y]]
         L = torch.cat([C.cpu(), AY, Y], -1)
-        _, Lr = torch.linalg.qr(L, 'reduced')    
+        _, Lr = torch.linalg.qr(L, 'reduced')
         Lc, LAy, Ly = torch.split(Lr, [s, k, k], dim=-1)
         #Mat1 = -Lc @ Lc.T + _symm2(LAy @ Ly.T) + Ly @ YtY @ Ly.T
         Mat1 = -Lc @ Lc.T + _symm2((LAy  + Ly @ YtY / 2) @ Ly.T)

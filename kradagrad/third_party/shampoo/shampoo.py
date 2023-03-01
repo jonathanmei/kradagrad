@@ -93,8 +93,11 @@ class ShampooHyperParams:
   kradapoo_type: int = 1
   replace_preconditioner_steps: int = 1
   kry_qr: int = 0
-  # how many low-rank components to keep?
-  low_rank: int = 25
+  # proportion of small tensors to rank reduce
+  # (e.g. tensor.numel==100, low_rank_factor==4  => target_rank==100/4==25)
+  low_rank_factor: int = 4
+  # max of how many low-rank components to keep?
+  low_rank: int = 100
   # increment of low-rank inner loop. higher is faster but less accurate
   rank_inc: int = 2
 
