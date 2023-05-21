@@ -7,3 +7,8 @@ Official PyTorch implementation of Kronecker Approximation-Domination preconditi
 - An implementation of resnet also lives in `third_party/` for convenience
 - Methods for taking p-th roots (and other useful utilities) for symmetric positive semi-definite matrices live in `positive_matrix_functions.py`
 - Experiments (training notebooks+scripts) will be found in `experiments/`
+
+Set up environment using conda:
+```
+conda env create -f krad.yml
+```
