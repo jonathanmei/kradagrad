@@ -5,7 +5,7 @@ from collections import defaultdict
 import torch
 
 from . import math_utils as mu
-from . import positive_matrix_functions as mf
+from .math_utils import positive_matrix_functions as mf
 from . import batched_matrix_functions as bmf
 from .third_party.shampoo import (
     Shampoo, Preconditioner,

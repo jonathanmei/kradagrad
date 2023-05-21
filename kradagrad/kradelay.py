@@ -3,7 +3,7 @@
 
 import torch
 
-from . import positive_matrix_functions as mf
+from .math_utils import positive_matrix_functions as mf
 from .third_party.shampoo import (
     Shampoo, Preconditioner,
     STEP, MOMENTUM, PRECONDITIONER, GRAFT,

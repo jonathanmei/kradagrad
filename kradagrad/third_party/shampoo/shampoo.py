@@ -41,7 +41,7 @@ import torch
 import torch.optim as optim
 
 from . import matrix_functions
-from ... import positive_matrix_functions as mf
+from ...math_utils import positive_matrix_functions as mf
 
 
 # Grafting is a technique to fix the layerwise scale of Shampoo optimizer.

@@ -4,7 +4,7 @@ import math
 
 import torch
 
-from . import positive_matrix_functions as mf
+from .math_utils import positive_matrix_functions as mf
 from .third_party.shampoo import MOMENTUM, PRECONDITIONER, Preconditioner, Shampoo
 
 
@@ -74,8 +74,6 @@ class KrADmmPreconditioner(Preconditioner):
                     grgt,
                     "\nprecon_grad",
                     precon_grad_,
-                    "\nstat",
-                    stat_,
                 )
                 raise ValueError("grgt broke")
 
@@ -129,17 +127,11 @@ class KrADmmPreconditioner(Preconditioner):
             stat = self.statistics[i]
             try:
                 if self._hps.iterative_matrix_roots:
-                    self.preconditioners[i] = mf.mat_root(
-                        stat,
-                        exp,
-                        self.preconditioners[i],
-                        double=self._hps.double,
-                        iters=10,
-                        tol=1e-4,
-                        inner_iters=20,
-                        inner_tol=1e-6,
-                        # debug=True
-                    )
+                    self.preconditioners[i] = (
+                        mf.symmetrize(mf.mat_pow(mf.mat_inv_root(
+                        stat, exp,
+                        double=self._hps.double, iter_count=10
+                    ), exp-1).mm(stat)))
                 else:
                     self.preconditioners[i] = (
                         mf.matrix_power_svd(stat, 1 / exp, double=self._hps.double)

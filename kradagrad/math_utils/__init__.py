@@ -1,5 +1,3 @@
-from . import cubic
-
 def roundup(p, m):
     # how many groups of m are in p?
     # p: int or float
