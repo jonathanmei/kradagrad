@@ -1,3 +1,5 @@
+This is the the repository for _Mei, Jonathan, Alexander Moreno and Luke Walters. "KrADagrad: Kronecker Approximation-Domination Gradient Preconditioned Stochastic Optimization." Uncertainty in Artificial Intelligence (2023)._
+
 # experiments
 
 A repository for ML research experiment code and results.
