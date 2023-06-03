@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 
 
 class FACESDataset(Dataset):
-    """FACES dataset."""
+    """Implements the FACES dataset in pytorch."""
 
     def __init__(self, root, transform=None):
         """
@@ -52,7 +52,7 @@ class FACESDataset(Dataset):
 
 
 class CURVESDataset(Dataset):
-    """CURVES dataset."""
+    """Implements the CURVES dataset in pytorch."""
 
     def __init__(self, root, train=True, transform=None):
         """

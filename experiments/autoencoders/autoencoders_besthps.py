@@ -25,6 +25,8 @@ from kradagrad.utils import get_optimizer
 
 
 class DenseNet(nn.Module):
+    """Implements a fully connected encoder-decoder network.
+    """
     def __init__(self, encoder_widths, decoder_widths, act_fn=nn.ReLU(), out_fn=None):
         super(DenseNet, self).__init__()
 
