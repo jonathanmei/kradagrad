@@ -1,26 +1,19 @@
 import argparse
 import json
-import os
-import sys
 import time
 from functools import partial
 
 import numpy as np
 import torch
 import torch.nn as nn
-
+from kradagrad.utils import get_optimizer
 from ray import air, tune
 from ray.air import session
 from torch.utils.tensorboard import SummaryWriter
 
-
-sys.path.insert(0, os.path.expanduser("~/experiments"))
-
-from kradagrad.utils import get_optimizer
-
-from .densenet import DenseNet
-from .configs import get_task_cfg
-from .dataloaders import get_dataloaders
+from configs import get_task_cfg
+from dataloaders import get_dataloaders
+from densenet import DenseNet
 
 
 def main(tune_cfg, args):
@@ -49,7 +42,6 @@ def main(tune_cfg, args):
 
     opt = tune_cfg["optimizer"].split("_")[0]
 
-    single = "_32" in tune_cfg["optimizer"]
     block_size = {"curves": 100, "mnist": 250, "faces": 500}[dataset]
     epochs = {"curves": 150, "mnist": 70, "faces": 150}[dataset]
     optimizer = get_optimizer(

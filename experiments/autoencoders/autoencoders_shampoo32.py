@@ -1,7 +1,5 @@
 import argparse
 import json
-import os
-import sys
 import time
 from functools import partial
 
@@ -13,16 +11,10 @@ from ray import air, tune
 from ray.air import session
 from torch.utils.tensorboard import SummaryWriter
 
-sys.path.insert(0, os.path.expanduser("~/experiments"))
-
 from kradagrad.utils import get_optimizer
-
-from .densenet import DenseNet
-from .configs import get_task_cfg
-from .dataloaders import get_dataloaders
-
-STEP_THRESHOLDS = {"faces": 5000, "mnist": 3000, "curves": 5000}
-VAL_THRESHOLDS = {"faces": 0.3, "mnist": 600, "curves": 250}
+from configs import get_task_cfg
+from dataloaders import get_dataloaders
+from densenet import DenseNet
 
 
 def main(tune_cfg, args):
@@ -126,11 +118,7 @@ def main(tune_cfg, args):
         writer.add_scalar("Loss/val", val_loss, train_steps)
 
         session.report({"val_loss": val_loss})
-        # threshold stopping
-        # if (train_steps > STEP_THRESHOLDS[args.dataset]) and (
-        #     val_loss > VAL_THRESHOLDS[args.dataset]
-        # ):
-        #     session.report(done=True)
+
 
         if val_loss < best_val:
             best_epoch = epoch

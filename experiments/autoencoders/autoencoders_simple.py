@@ -1,138 +1,14 @@
 import argparse
 import time
-from typing import NamedTuple
 
 import numpy as np
 import torch
 import torch.nn as nn
-import torchvision
-import torchvision.transforms as transforms
 from torch.utils.tensorboard import SummaryWriter
 
-from datasets import CURVESDataset, FACESDataset
-
-
-class DenseNet(nn.Module):
-    """Implements a fully connected encoder-decoder network.
-    """
-    def __init__(self, encoder_widths, decoder_widths, act_fn=nn.ReLU(), out_fn=None):
-        super(DenseNet, self).__init__()
-
-        assert (
-            encoder_widths[-1] == decoder_widths[0]
-        ), "encoder output and decoder input dims must match"
-
-        enc_layers = {}
-        for k in range(len(encoder_widths) - 1):
-            enc_layers[f"enc_layer_{k}"] = nn.Linear(
-                encoder_widths[k], encoder_widths[k + 1]
-            )
-        self.enc_layers = nn.ModuleDict(enc_layers)
-
-        dec_layers = {}
-        for k in range(len(decoder_widths) - 1):
-            dec_layers[f"dec_layer_{k}"] = nn.Linear(
-                decoder_widths[k], decoder_widths[k + 1]
-            )
-        self.dec_layers = nn.ModuleDict(dec_layers)
-
-        self.act_fn = act_fn
-        self.out_fn = out_fn
-
-    def forward(self, x):
-        for k in range(len(self.enc_layers)):
-            x = self.enc_layers[f"enc_layer_{k}"](x)
-            x = x if k == len(self.enc_layers) - 1 else self.act_fn(x)
-
-        for k in range(len(self.dec_layers)):
-            x = self.dec_layers[f"dec_layer_{k}"](x)
-            if k == len(self.dec_layers) - 1:
-                x = x if self.out_fn is None else self.out_fn(x)
-            else:
-                x = self.act_fn(x)
-        return x
-
-
-class MNISTConfig(NamedTuple):
-    encoder_widths = [784, 1000, 500, 250, 30]
-    decoder_widths = [30, 250, 500, 1000, 784]
-    act_fn = nn.ReLU()
-    out_fn = None
-    loss_fn = nn.CrossEntropyLoss()
-
-
-class FACESConfig(NamedTuple):
-    encoder_widths = [625, 2000, 1000, 500, 30]
-    decoder_widths = [30, 500, 1000, 2000, 625]
-    act_fn = nn.ReLU()
-    out_fn = None
-    loss_fn = nn.MSELoss()
-
-
-class CURVESConfig(NamedTuple):
-    encoder_widths = [784, 400, 200, 100, 50, 25, 6]
-    decoder_widths = [6, 25, 50, 100, 200, 400, 784]
-    act_fn = nn.ReLU()
-    out_fn = None
-    loss_fn = nn.CrossEntropyLoss()
-
-
-def get_task_cfg(dataset):
-    if dataset == "mnist":
-        return MNISTConfig()
-    elif dataset == "faces":
-        return FACESConfig()
-    elif dataset == "curves":
-        return CURVESConfig()
-    else:
-        raise ValueError(f"Dataset {dataset} is not supported")
-
-
-def get_dataloaders(dataset, batch_size=100, root=None):
-    if dataset == "mnist":
-        train_set = torchvision.datasets.MNIST(
-            root=root or "./data",
-            train=True,
-            download=True,
-            transform=transforms.ToTensor(),
-        )
-        test_set = torchvision.datasets.MNIST(
-            root=root or "./data",
-            train=False,
-            download=True,
-            transform=transforms.ToTensor(),
-        )
-
-    elif dataset == "faces":
-        train_set = FACESDataset(
-            root=root or "./data",
-            transform=transforms.Compose(
-                [transforms.ToTensor(), transforms.Normalize(mean=0.0, std=1.0)]
-            ),
-        )
-        train_set, test_set = torch.utils.data.random_split(train_set, [103500, 62100])
-
-    elif dataset == "curves":
-        train_set = CURVESDataset(
-            root=root or "./data",
-            train=True,
-        )
-
-        test_set = CURVESDataset(
-            root=root or "./data",
-            train=False,
-        )
-    else:
-        raise ValueError(f"Dataset {dataset} is not supported")
-
-    train_loader = torch.utils.data.DataLoader(
-        train_set, batch_size=batch_size, shuffle=True, num_workers=2
-    )
-    test_loader = torch.utils.data.DataLoader(
-        test_set, batch_size=batch_size, shuffle=False, num_workers=2
-    )
-
-    return train_loader, test_loader
+from configs import get_task_cfg
+from dataloaders import get_dataloaders
+from densenet import DenseNet
 
 
 def main(args):
@@ -143,7 +19,8 @@ def main(args):
     seed = args.seed
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+    if not args.cpu:
+        torch.cuda.manual_seed(seed)
 
     net = DenseNet(
         encoder_widths=cfg.encoder_widths,
@@ -151,7 +28,8 @@ def main(args):
         act_fn=cfg.act_fn,
         out_fn=cfg.out_fn,
     )
-    net.cuda()
+    if not args.cpu:
+        net.cuda()
 
     train_loader, test_loader = get_dataloaders(
         args.dataset, args.batch_size, root="./data"
@@ -184,7 +62,8 @@ def main(args):
             if args.show_iter_time:
                 start_time = time.time()
 
-            inputs = inputs.float().cuda()
+            if not args.cpu:
+                inputs = inputs.float().cuda()
             inputs = flatten(inputs)
 
             optimizer.zero_grad()
@@ -280,6 +159,8 @@ def get_args():
     parser.add_argument("--status_freq", type=int, default=100)
     parser.add_argument("--from_ckpt", action="store_true")
     parser.add_argument("--show_iter_time", action="store_true")
+    parser.add_argument("--cpu", action="store_true")
+
 
     return parser.parse_args()
 

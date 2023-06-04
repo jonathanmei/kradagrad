@@ -1,26 +1,19 @@
 import argparse
-import json
-import os
-import sys
 import time
 from functools import partial
 
 import numpy as np
 import torch
 import torch.nn as nn
-
+from kradagrad.utils import get_optimizer
 from ray import air, tune
 from ray.air import session
 from ray.tune.schedulers import ASHAScheduler
 from torch.utils.tensorboard import SummaryWriter
 
-sys.path.insert(0, os.path.expanduser("~/experiments"))
-
-from kradagrad.utils import get_optimizer
-
-from .densenet import DenseNet
-from .configs import get_task_cfg
-from .dataloaders import get_dataloaders
+from configs import get_task_cfg
+from dataloaders import get_dataloaders
+from densenet import DenseNet
 
 
 def main(tune_cfg, args):
@@ -206,7 +199,7 @@ def get_eps_sweep(opt):
 
 
 if __name__ == "__main__":
-    
+
     args = get_args()
 
     if not args.debug:
